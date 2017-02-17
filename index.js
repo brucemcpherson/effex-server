@@ -7,7 +7,7 @@
 // environment values required
 // these can be set up in .bashrc
 // PORT - server listens on
-// IP - server HOST
+///////////////// IP - server HOST
 // REDIS_PASS - password that redis will respond 
 // set up the ip and host in the conf.
 
@@ -74,7 +74,10 @@ var App = (function(ns) {
     }));
     app.use(morgan('combined'));
     
-    app.listen(process.env.PORT, process.env.IP);
+    var PORT = process.env.PORT || 8080;
+
+
+    app.listen(PORT ); //, process.env.IP);
     // respond with api help when request with no stuff is made
     app.get('/', function(req, res) {
 
