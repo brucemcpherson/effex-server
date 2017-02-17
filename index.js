@@ -800,7 +800,8 @@ var Process = (function(ns) {
     function redisConf_ (db)  {
       var p = {
           db:ns.settings.db[db],
-          password:process.env.REDIS_PASS
+          password:process.env.REDIS_PASS,
+          port:process.env.REDIS_PORT
         };
       
       try {
