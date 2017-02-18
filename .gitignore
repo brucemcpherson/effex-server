@@ -1,3 +1,6 @@
+# yaml with env data
+app.yaml
+
 # Logs
 logs
 *.log
