@@ -4,11 +4,11 @@
  */
 // restart redis - sudo service redis-server start
 // environment variables required - set in ~/.bashrc
-//export REDIS_PASS=3f8ce46041a150bb71ba7e4fdae8aa521c7a8f57e7a738afe2bf37ead01249ee
-//export REDIS_PORT=6395
-//export REDIS_IP=127.0.0.1
-//export EFFEX_MASTER_SEED=a1002b091fc6f2d6a1edd7b27760519c87846ff2ae355a9eca952589e66ffb89
-//export EFFEX_ALGO=e10bb4b0177434321eacc2827ece680b0d1872fcf24f24e0ac77060e53c5b1ba
+//export REDIS_PASS=<redis password>
+//export REDIS_PORT=<redis port>
+//export REDIS_IP=<ip number of redis server>
+//export EFFEX_MASTER_SEED=<some string to use for encryption>
+//export EFFEX_ALGO=<some string to use to generate coupons>
 var express = require('express');
 var app = express();
 var cors = require('cors');
