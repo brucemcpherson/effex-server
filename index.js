@@ -789,8 +789,8 @@ var Process = (function(ns) {
       redisPass:process.env.REDIS_PASS,
       effexMasterSeed:process.env.EFFEX_MASTER_SEED,
       effexAlgo:process.env.EFFEX_ALGO,
-      expressPort:process.env.PORT,
-      expressHost:process.env.IP
+      expressPort:process.env.PORT || '8080',
+      expressHost:process.env.IP || '0.0.0.0'
     };
     
     // check we got them all
