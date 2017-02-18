@@ -3,19 +3,18 @@
  * get baseurl for API info
  */
 // restart redis - sudo service redis-server start
-// .. actually use this for password sudo redis-server ./redisc9.conf
-// environment values required
-// these can be set up in .bashrc
-// PORT - server listens on
-///////////////// IP - server HOST
-// REDIS_PASS - password that redis will respond 
-// set up the ip and host in the conf.
-
+// environment variables required - set in ~/.bashrc
+//export REDIS_PASS=3f8ce46041a150bb71ba7e4fdae8aa521c7a8f57e7a738afe2bf37ead01249ee
+//export REDIS_PORT=6395
+//export REDIS_IP=127.0.0.1
+//export EFFEX_MASTER_SEED=a1002b091fc6f2d6a1edd7b27760519c87846ff2ae355a9eca952589e66ffb89
+//export EFFEX_ALGO=e10bb4b0177434321eacc2827ece680b0d1872fcf24f24e0ac77060e53c5b1ba
 var express = require('express');
 var app = express();
 var cors = require('cors');
 var bodyParser = require('body-parser');
 var morgan = require("morgan");
+var env_;
 
 var App = (function(ns) {
 
@@ -74,10 +73,7 @@ var App = (function(ns) {
     }));
     app.use(morgan('combined'));
     
-    var PORT = process.env.PORT || 8080;
-
-
-    app.listen(PORT ); //, process.env.IP);
+    app.listen(env_.expressPort,env_.expressHost ); //, process.env.IP);
     // respond with api help when request with no stuff is made
     app.get('/', function(req, res) {
 
@@ -647,7 +643,7 @@ var Process = (function(ns) {
     }
 
     return redisAccounts_
-      .set(pack.accountId, encryptText_(params.data, ns.settings.accountSeed + pack.accountId))
+      .set(pack.accountId, encryptText_(params.data, env_.effexMasterSeed+ns.settings.accountSeed + pack.accountId))
       .then(function(result) {
         return pack;
       })
@@ -737,7 +733,7 @@ var Process = (function(ns) {
     
     return redisAccounts_.get(accountId)
       .then(function(result) {
-        return Promise.resolve(result ? decryptText_(result, ns.settings.accountSeed + accountId) : result);
+        return Promise.resolve(result ? decryptText_(result, env_.effexMasterSeed+ns.settings.accountSeed + accountId) : result);
       })
       .catch(function(err) {
         return ns.errify(false, 500, err, {accountId:accountId});
@@ -777,7 +773,7 @@ var Process = (function(ns) {
    * @return {string} the private
    */
   ns.getPrivateKey = function(accountId, public) {
-    return ns.settings.itemPrefix + "-" + coupon_.sign(public, ns.settings.itemSeed).toString('base64EncodeWebSafe');
+    return ns.settings.itemPrefix + "-" + coupon_.sign(public, env_.effexMasterSeed+ns.settings.itemSeed).toString('base64EncodeWebSafe');
   };
 
 
@@ -786,9 +782,26 @@ var Process = (function(ns) {
    */
   ns.init = function() {
 
+    // need env variables
+    env_ = {
+      redisPort:process.env.REDIS_PORT,
+      redisIp:process.env.REDIS_IP,
+      redisPass:process.env.REDIS_PASS,
+      effexMasterSeed:process.env.EFFEX_MASTER_SEED,
+      effexAlgo:process.env.EFFEX_ALGO,
+      expressPort:process.env.PORT,
+      expressHost:process.env.IP
+    };
+    
+    // check we got them all
+    if (Object.keys(env_).some(function(d) {return !env_[d]})) {
+      console.log('missing required env variables', env_);
+      process.exit(1);
+    }
+
     // need stuff for decoding coupons (apikeys)
     var c = require("./coupon.js");
-    coupon_ = new c();
+    coupon_ = new c(env_.effexAlgo);
 
     lucky_ = require("./lucky.js");
 
@@ -800,8 +813,9 @@ var Process = (function(ns) {
     function redisConf_ (db)  {
       var p = {
           db:ns.settings.db[db],
-          password:process.env.REDIS_PASS,
-          port:process.env.REDIS_PORT
+          password:env_.redisPass,
+          port:env_.redisPort,
+          host:env_.redisIp
         };
       
       try {
@@ -1464,11 +1478,11 @@ var Process = (function(ns) {
   };
 
   function getCipher_(privateKey) {
-    return crypto.createCipher(ns.settings.cryptoAlgo, ns.settings.cryptoSeed + privateKey);
+    return crypto.createCipher(ns.settings.cryptoAlgo, env_.effexMasterSeed+ns.settings.cryptoSeed + privateKey);
   }
 
   function getDecipher_(privateKey) {
-    return crypto.createDecipher(ns.settings.cryptoAlgo, ns.settings.cryptoSeed + privateKey);
+    return crypto.createDecipher(ns.settings.cryptoAlgo, env_.effexMasterSeed+ns.settings.cryptoSeed + privateKey);
   }
 
   function encryptText_(text, privateKey) {

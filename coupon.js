@@ -3,13 +3,13 @@
  * @namespace Coupon
  */
 
-module.exports =  function () {
+module.exports =  function (algo) {
 
   var self = this;
   var crypto = require('crypto');
   
   // changing this will invalidate all previous tokeself 
-  var ALGO = "#humpity@trumpity";
+  var ALGO = algo + "#humpity@trumpity";
   var SIG_SIZE = 3;
 
   // a coupon looks like this
