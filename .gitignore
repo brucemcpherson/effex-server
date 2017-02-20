@@ -1,5 +1,7 @@
 # yaml with env data
 app.yaml
+#myconfig
+appConfigs.js
 
 # Logs
 logs

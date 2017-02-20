@@ -3,7 +3,7 @@
  * get baseurl for API info
  */
 // restart redis - sudo service redis-server start
-// environment variables required - set in ~/.bashrc
+// these can be in config.json or as environment variablesvi set in ~/.bashrc
 //export REDIS_PASS=<redis password>
 //export REDIS_PORT=<redis port>
 //export REDIS_IP=<ip number of redis server>
@@ -13,48 +13,26 @@ var express = require('express');
 var app = express();
 var cors = require('cors');
 var bodyParser = require('body-parser');
-var morgan = require("morgan");
+//var morgan = require("morgan");
+var appConfigs = require('./appConfigs.js');
+
 var env_;
 
 var App = (function(ns) {
-
-  /**
-   * intercept the res.send to add jsonp if needed
-   * @param {request} req the request
-   * @param {response} res the response
-   * @param {object} what the thing
-   */
-  ns.send = function(req, res, what) {
-
-    if (req.query.callback) {
-
-      app.set("jsonp callback name", req.query.callback);
-      res.jsonp(what);
-
-    }
-    else {
-
-      res.json(what);
-      
-    }
-
-
-  };
-
-
 
   // this is a middleware to handle promises in the router
   function prommy(req, res, next) {
     res.prom = function(prom) {
       prom.then(function(result) {
-        res.json(result);
-      })
-      .catch(function(error) {
-        console.log('dispatching error', error);
-        res.json(error);
-      });
+          res.json(result);
+        })
+        .catch(function(error) {
+          console.log('dispatching error', error);
+          res.json(error);
+        });
     };
-    next();
+    // if using logger...
+    //next();
   }
 
 
@@ -62,7 +40,7 @@ var App = (function(ns) {
    * call to kick off the routing listeners
    */
   ns.init = function() {
-    
+
     // does the interactions and runs the server
     // pick up ports from c9 env variables
     app.use(cors());
@@ -71,13 +49,13 @@ var App = (function(ns) {
     app.use(bodyParser.urlencoded({ // to support URL-encoded bodies
       extended: false
     }));
-    app.use(morgan('combined'));
-    
-    app.listen(env_.expressPort,env_.expressHost ); //, process.env.IP);
+    //app.use(morgan('combined'));
+
+    app.listen(env_.expressPort, env_.expressHost); //, process.env.IP);
+
     // respond with api help when request with no stuff is made
     app.get('/', function(req, res) {
-
-      ns.send(req, res, {
+      res.prom(Promise.resolve({
         ok: true,
         code: 200,
         info: {
@@ -87,8 +65,8 @@ var App = (function(ns) {
           updateValue: "/updater/:updaterkey/:id - with the data parameter (GET) or post body (POST)",
           remove: "/writer/:writerkey/:id - remove the item (DELETE)",
           validate: "/validate/:key - validates any key",
-          ping:"/ping - checks the service is alive",
-          quotas:"/quotas - get all the service quotas",
+          ping: "/ping - checks the service is alive",
+          quotas: "/quotas - get all the service quotas",
           parameters: {
             general: "callback=jsonpcallback",
             data: "data=some data - normally in POST body, but for convenience can do GET as well",
@@ -103,13 +81,13 @@ var App = (function(ns) {
             apikey: "needed for creating a bosskey - will be checked against account for validity"
           }
         }
-      });
+      }))
     });
 
     //---this is admin and will be hidden in the final thing
     // get a boss key for an account
     app.get("/admin/account/:accountid/:type/:plan", function(req, res) {
-      
+
       var params = Process.squashParams(req);
       var pack = Process.getCoupon(req);
 
@@ -117,9 +95,9 @@ var App = (function(ns) {
       params.unlock = params.lock;
 
       var registered = new Promise(function(resolve, reject) {
-        
+
         // must have a uid
-        pack =  Process.errify  (params.apikey , 401 , "an apikey is needed to create a boss key", pack);
+        pack = Process.errify(params.apikey, 401, "an apikey is needed to create a boss key", pack);
         if (!pack.ok) {
           resolve(pack);
         }
@@ -128,19 +106,19 @@ var App = (function(ns) {
           pack = Process.getCouponPack(pack.code, params);
 
           // make sure its a valid/active account
-          Process.checkAccount(pack,params.apikey)
-          .then (function(result) {
-            if (result.ok) {
-              return Process.registerBoss(pack)
-                .then(function(result) {
-                  resolve(result);
-                });
-            }
-            else {
-              result.key="";
-              resolve (result);
-            }
-          });
+          Process.checkAccount(pack, params.apikey)
+            .then(function(result) {
+              if (result.ok) {
+                return Process.registerBoss(pack)
+                  .then(function(result) {
+                    resolve(result);
+                  });
+              }
+              else {
+                result.key = "";
+                resolve(result);
+              }
+            });
         }
       });
 
@@ -151,14 +129,14 @@ var App = (function(ns) {
 
     });
 
-    app.get("/ping", function ( req, res) {
-      res.prom (Process.ping());
+    app.get("/ping", function(req, res) {
+      res.prom(Process.ping());
     });
-    
-    app.get("/quotas", function ( req, res) {
-      res.prom (Process.getQuotas());
+
+    app.get("/quotas", function(req, res) {
+      res.prom(Process.getQuotas());
     });
-    
+
     // authid is a parameter in the post body
     app.post("/admin/register/:accountid", function(req, res) {
       res.prom(Process.registerAccount(req));
@@ -190,25 +168,20 @@ var App = (function(ns) {
       res.prom(Process.statsGet(req));
     });
 
-
-    //... to review....
-
     app.get("/admin/account/:accountid", function(req, res) {
-      res.prom( Process.getAccount(req.params.accountid));
+      res.prom(Process.getAccount(req.params.accountid));
     });
-
 
     // get all  the stats for all users
     app.get("/admin/stats", function(req, res) {
-      res.prom( Process.statsGet(req));
+      res.prom(Process.statsGet(req));
     });
 
     //-- validates and reports on a key 
     app.get("/validate/:bosskey", function(req, res) {
       var params = Process.squashParams(req);
-      res.prom( Promise.resolve(Process.getCouponPack(params.bosskey, params)));
+      res.prom(Promise.resolve(Process.getCouponPack(params.bosskey, params)));
     });
-
 
     // this is an update 
     app.route("/updater/:updater/:id")
@@ -219,12 +192,12 @@ var App = (function(ns) {
         res.prom(Process.reqSet(req));
       });
 
-      
+
     // this is delete
     app.route("/writer/:writer/:id")
-    .delete(function(req, res) {
-      res.prom(Process.reqRemove(req));
-    });
+      .delete(function(req, res) {
+        res.prom(Process.reqRemove(req));
+      });
 
     // this is a new record
     app.route("/writer/:writer")
@@ -247,21 +220,20 @@ var App = (function(ns) {
       res.prom(Process.reqGetKey(req));
     });
 
-    
+
     // the request was a mess
     app.use(function(req, res) {
       console.log('received unrecognizable url', req.headers.referer);
-      ns.send(req, res, {
+      res.prom (Promise.resolve({
         ok: false,
         code: 404,
         error: "api url construction is unrecognizable:" + (req && req.headers ? req.headers.referer : "unknown")
-      });
+      }));
 
     });
 
-
-
   };
+
   return ns;
 })({});
 
@@ -350,8 +322,7 @@ var Process = (function(ns) {
       },
     },
 
-    seeds: [
-    {
+    seeds: [{
       name: "wak",
       type: "writer",
       value: "d.r0L09-wkb#",
@@ -376,7 +347,7 @@ var Process = (function(ns) {
       type: "reader",
       value: "4%r009(wkB",
       plan: "a"
-    },{
+    }, {
       name: "rbk",
       type: "reader",
       value: "0.T%r0(9(AB",
@@ -386,12 +357,12 @@ var Process = (function(ns) {
       type: "item",
       value: "-i%09(AB",
       plan: "a"
-    },{
+    }, {
       name: "db",
       type: "item",
       value: "T%0(+!(B",
       plan: "b"
-    },{
+    }, {
       name: "ba",
       type: "boss",
       value: "z&9P=+&0^",
@@ -403,7 +374,7 @@ var Process = (function(ns) {
       value: "y12P=+&0^",
       plan: "b",
       boss: ["reader", "writer", "updater"]
-    },{
+    }, {
       name: "wxk",
       type: "writer",
       value: "d0L09-wkb#",
@@ -413,7 +384,7 @@ var Process = (function(ns) {
       type: "updater",
       value: "dr00w-b#",
       plan: "x"
-    },{
+    }, {
       name: "rxk",
       type: "reader",
       value: "4%r09(wkB",
@@ -423,8 +394,7 @@ var Process = (function(ns) {
       type: "item",
       value: "-i-%09(AB",
       plan: "x"
-    },
-    {
+    }, {
       name: "bx",
       type: "boss",
       value: "z&9=+&0^",
@@ -450,16 +420,16 @@ var Process = (function(ns) {
       rate: 0,
       bosses: 4,
       accounts: 5,
-      password:"mybo0xnbunieli1eso0qqve444rtheSeaAnd-24#the0ocEan-4#12#$--cafI9£4ax3"
+      password: "mybo0xnbunieli1eso0qqve444rtheSeaAnd-24#the0ocEan-4#12#$--cafI9£4ax3"
     },
-    
+
     statsSeconds: 15 * 60 // samples are every 15 mins
   };
 
   ns.registerBoss = function(pack) {
 
     var exp = new Date(pack.validtill).getTime() - new Date().getTime();
-    return redisBosses_.set(pack.key, pack.accountId, "EX" , exp > 0 ? 10 + Math.round(exp /1000) : 10 )
+    return redisBosses_.set(pack.key, pack.accountId, "EX", exp > 0 ? 10 + Math.round(exp / 1000) : 10)
       .then(function(result) {
         return pack;
       });
@@ -492,8 +462,8 @@ var Process = (function(ns) {
       .then(function(result) {
         pack.keys = result;
         // generate coupons for each
-        pack.coupons = pack.keys.map(function (d) {
-          return ns.getCouponPack(d,{});          
+        pack.coupons = pack.keys.map(function(d) {
+          return ns.getCouponPack(d, {});
         });
         return pack;
       });
@@ -582,32 +552,32 @@ var Process = (function(ns) {
   /**
    * check an boss key exists
    */
-  ns.checkBoss = function (pack, bosskey) {
+  ns.checkBoss = function(pack, bosskey) {
 
-    if (pack.ok) {
-      return redisBosses_.exists(bosskey)
-        .then(function(result) {
-          return ns.errify (result, 404 , "bosskey " + bosskey +" doesn't exist", pack);
-        });
+      if (pack.ok) {
+        return redisBosses_.exists(bosskey)
+          .then(function(result) {
+            return ns.errify(result, 404, "bosskey " + bosskey + " doesn't exist", pack);
+          });
+      }
+      else {
+        return Promise.resolve(pack);
+      }
     }
-    else {
-      return Promise.resolve(pack);
-    }
-  }
-  /**
-   * check an account exists
-   * @param {string} [apikey] if specified, then make sure it matches the uid in the account
-   */
-  ns.checkAccount = function (pack, apikey) {
+    /**
+     * check an account exists
+     * @param {string} [apikey] if specified, then make sure it matches the uid in the account
+     */
+  ns.checkAccount = function(pack, apikey) {
 
     if (pack.ok) {
       return ns.getAccount(pack.accountId)
         .then(function(result) {
-          ns.errify (result, 404 , "account doesn't exist", pack);
+          ns.errify(result, 404, "account doesn't exist", pack);
           if (pack.ok) {
-            var ob = JSON.parse (result);
-            ns.errify (ob.active , 404 , "accout is not active", pack);
-            ns.errify (!apikey || apikey === ob.authid, 401 , "apikey not valid for this account",pack);
+            var ob = JSON.parse(result);
+            ns.errify(ob.active, 404, "accout is not active", pack);
+            ns.errify(!apikey || apikey === ob.authid, 401, "apikey not valid for this account", pack);
             if (!pack.ok) {
               pack.key = "";
               pack.validtill = "";
@@ -632,7 +602,7 @@ var Process = (function(ns) {
       accountId: params.accountid,
       authId: params.data.authid,
       modified: new Date().getTime(),
-      active:params.data.active
+      active: params.data.active
     });
 
     ns.errify(pack.authId, 400, "authid required", pack);
@@ -643,7 +613,7 @@ var Process = (function(ns) {
     }
 
     return redisAccounts_
-      .set(pack.accountId, encryptText_(params.data, env_.effexMasterSeed+ns.settings.accountSeed + pack.accountId))
+      .set(pack.accountId, encryptText_(params.data, env_.effexMasterSeed + ns.settings.accountSeed + pack.accountId))
       .then(function(result) {
         return pack;
       })
@@ -658,7 +628,7 @@ var Process = (function(ns) {
   ns.statsGet = function(req) {
     // the keys to write this against
     var params = ns.squashParams(req);
-    
+
     var accountId = params.accountid;
     var start = params.start;
     var finish = params.finish;
@@ -668,31 +638,31 @@ var Process = (function(ns) {
         // all the matching keys for the acccountid/ or all of them
         // get them all at once
         return Promise.all(keys.map(function(d) {
-          // this is a specific key, so return the hash but modified
-          return redisStats_.hgetall(d)
-            .then(function(item) {
-              item.accountId = accountId;
-              return Object.keys(item)
-                .reduce(function(p, c) {
-                  p[c] = parseInt(item[c], 10);
-                  if (isNaN(p[c])) {
-                    p[c] = item[c];
-                  }
-                  return p;
-                }, {});
+            // this is a specific key, so return the hash but modified
+            return redisStats_.hgetall(d)
+              .then(function(item) {
+                item.accountId = accountId;
+                return Object.keys(item)
+                  .reduce(function(p, c) {
+                    p[c] = parseInt(item[c], 10);
+                    if (isNaN(p[c])) {
+                      p[c] = item[c];
+                    }
+                    return p;
+                  }, {});
+              });
+          }))
+          .then(function(pr) {
+            return ns.errify(true, 200, "", {
+              chunks: pr.filter(function(d) {
+                return d.start >= start && d.start <= finish;
+              }),
+              ok: true,
+              accountId: accountId,
+              start: start,
+              finish: finish
             });
-        }))
-        .then (function(pr) {
-          return ns.errify(true,200,"",{
-            chunks:pr.filter(function (d) {
-              return d.start >= start && d.start <= finish;
-            }),
-            ok:true,
-            accountId:accountId,
-            start:start,
-            finish:finish
           });
-        });
       });
 
   };
@@ -730,13 +700,15 @@ var Process = (function(ns) {
    * get a given account
    */
   ns.getAccount = function(accountId) {
-    
+
     return redisAccounts_.get(accountId)
       .then(function(result) {
-        return Promise.resolve(result ? decryptText_(result, env_.effexMasterSeed+ns.settings.accountSeed + accountId) : result);
+        return Promise.resolve(result ? decryptText_(result, env_.effexMasterSeed + ns.settings.accountSeed + accountId) : result);
       })
       .catch(function(err) {
-        return ns.errify(false, 500, err, {accountId:accountId});
+        return ns.errify(false, 500, err, {
+          accountId: accountId
+        });
       });
   };
 
@@ -750,14 +722,14 @@ var Process = (function(ns) {
    */
   ns.getNewKey = function(pack) {
     //var publicKey = lucky_.getUniqueString(ns.settings.keyLength);
-    
+
     var coupon = ns.makeCoupon({
-      accountid:pack.accountId, 
-      plan:pack.plan,
-      type:'item',
-      seconds:pack.lifetime
+      accountid: pack.accountId,
+      plan: pack.plan,
+      type: 'item',
+      seconds: pack.lifetime
     });
-    
+
     ns.errify(coupon && coupon.ok, 500, "failed to generate item id", pack);
     var publicKey = coupon.code || "";
     return {
@@ -773,7 +745,7 @@ var Process = (function(ns) {
    * @return {string} the private
    */
   ns.getPrivateKey = function(accountId, public) {
-    return ns.settings.itemPrefix + "-" + coupon_.sign(public, env_.effexMasterSeed+ns.settings.itemSeed).toString('base64EncodeWebSafe');
+    return ns.settings.itemPrefix + "-" + coupon_.sign(public, env_.effexMasterSeed + ns.settings.itemSeed).toString('base64EncodeWebSafe');
   };
 
 
@@ -782,19 +754,26 @@ var Process = (function(ns) {
    */
   ns.init = function() {
 
+    appConfigs.load({
+      PORT: "8080",
+      IP: "0.0.0.0"
+    });
+
     // need env variables
     env_ = {
-      redisPort:process.env.REDIS_PORT,
-      redisIp:process.env.REDIS_IP,
-      redisPass:process.env.REDIS_PASS,
-      effexMasterSeed:process.env.EFFEX_MASTER_SEED,
-      effexAlgo:process.env.EFFEX_ALGO,
-      expressPort:process.env.PORT || '8080',
-      expressHost:process.env.IP || '0.0.0.0'
+      redisPort: appConfigs.get("REDIS_PORT"),
+      redisIp: appConfigs.get("REDIS_IP"),
+      redisPass: appConfigs.get("REDIS_PASS"),
+      effexMasterSeed: appConfigs.get("EFFEX_MASTER_SEED"),
+      effexAlgo: appConfigs.get("EFFEX_ALGO"),
+      expressPort: appConfigs.get("PORT"),
+      expressHost: appConfigs.get("IP")
     };
-    
+
     // check we got them all
-    if (Object.keys(env_).some(function(d) {return !env_[d]})) {
+    if (Object.keys(env_).some(function(d) {
+        return !env_[d]
+      })) {
       console.log('missing required env variables', env_);
       process.exit(1);
     }
@@ -810,20 +789,20 @@ var Process = (function(ns) {
 
 
     // set up the base connecting object
-    function redisConf_ (db)  {
+    function redisConf_(db) {
       var p = {
-          db:ns.settings.db[db],
-          password:env_.redisPass,
-          port:env_.redisPort,
-          host:env_.redisIp
-        };
-      
+        db: ns.settings.db[db],
+        password: env_.redisPass,
+        port: env_.redisPort,
+        host: env_.redisIp
+      };
+
       try {
-        var red = new redis (p);
+        var red = new redis(p);
         return red;
       }
       catch (err) {
-        console.log('failed to get redis handle',err);
+        console.log('failed to get redis handle', err);
         process.exit();
       }
     }
@@ -832,8 +811,8 @@ var Process = (function(ns) {
     redisAdmin_ = redisConf_('admin');
     redisRate_ = redisConf_('rate');
     redisStats_ = redisConf_('stats');
-    redisBosses_= redisConf_('bosses');
-    redisAccounts_= redisConf_('accounts');
+    redisBosses_ = redisConf_('bosses');
+    redisAccounts_ = redisConf_('accounts');
 
 
     // need a rate manager for each possible plan
@@ -867,27 +846,27 @@ var Process = (function(ns) {
    */
   ns.ping = function() {
     return redisClient_.ping()
-    .then (function(result) {
-      return {
-        ok:true, 
-        value:result,
-        code:200
-      };
-    })
-    .catch (function(err) {
-      return ns.errify(false,503,err,{});
-    });
+      .then(function(result) {
+        return {
+          ok: true,
+          value: result,
+          code: 200
+        };
+      })
+      .catch(function(err) {
+        return ns.errify(false, 503, err, {});
+      });
   };
-  
-   /**
+
+  /**
    * return the quotas
    * @return {Promise}
    */
   ns.getQuotas = function() {
-    return Promise.resolve ({
-      quotas:ns.settings.plans,
-      ok:true,
-      code:200
+    return Promise.resolve({
+      quotas: ns.settings.plans,
+      ok: true,
+      code: 200
     });
   };
   /**
@@ -908,26 +887,26 @@ var Process = (function(ns) {
               //parse it
               var ob = obify_(result, pack);
               ns.statify(pack.accountId, couponKey, "remove", 0);
-              ns.errify(ob , 404, "item cannot be removed as it does not exist", pack);
+              ns.errify(ob, 404, "item cannot be removed as it does not exist", pack);
               // make sure we can touch it
               ns.errify(ob && ob.accountId && pack.accountId === ob.accountId, 500, "account id mismatches key", pack);
               if (pack.ok && canWrite_(pack, ob) && ob.owner === pack.writer) {
                 // all is good
-                  return ns.checkAccount(pack)
-                  .then (function (result) {
-                    return result.ok ? 
-                       ns.del(ns.getPrivateKey(pack.accountId, pack.id))
-                        .then(function(dr) {
-                          ns.errify(dr, 500, "failed to delete item", pack);
-                          if (pack.ok) {
-                            pack.code = 204;
-                          }
-                          return pack;
-                        }) : result;
+                return ns.checkAccount(pack)
+                  .then(function(result) {
+                    return result.ok ?
+                      ns.del(ns.getPrivateKey(pack.accountId, pack.id))
+                      .then(function(dr) {
+                        ns.errify(dr, 500, "failed to delete item", pack);
+                        if (pack.ok) {
+                          pack.code = 204;
+                        }
+                        return pack;
+                      }) : result;
                   });
               }
               else if (ob) {
-                
+
                 ns.errify(false, 403, "only the owner can remove an item", pack);
 
               }
@@ -1087,7 +1066,7 @@ var Process = (function(ns) {
     }
 
     function writeOb_(oldOb) {
-      
+
 
       // but dont bother if something has gone wrong
       if (!pack.ok) {
@@ -1098,17 +1077,17 @@ var Process = (function(ns) {
       var ob = oldOb || {};
       var writer = oldOb ? oldOb.writer : pack.writer;
       var updater = pack.updater;
-      
+
       if (!writer) {
         console.log('should have been a writer', pack, oldOb);
       }
-      
+
       // the value has some control stuff around it
       var data = {
         value: value,
         modified: new Date().getTime(),
         accountId: pack.accountId,
-        writer:writer
+        writer: writer
       };
 
       // the owner will be the writer for a new thing,
@@ -1335,12 +1314,12 @@ var Process = (function(ns) {
 
     // get rid of no writers
     if (pack.type !== 'writer' && pack.type !== 'updater') {
-      ns.errify(false, 401, "You need a valid writer or updater key to write to the exchange:" +pack.type, pack);
+      ns.errify(false, 401, "You need a valid writer or updater key to write to the exchange:" + pack.type, pack);
       return Promise.resolve(pack);
     }
-    
+
     var couponKey = pack.key;
-    
+
     pack = {
       writer: params.writer,
       updater: params.updater,
@@ -1383,12 +1362,12 @@ var Process = (function(ns) {
       pack.ok = true;
     }
     pack.lifetime = params.lifetime ? parseInt(params.lifetime, 10) : 0;
-    
+
     // now we can set it
     return ns.checkAccount(pack)
-    .then (function (result) {
-      return result.ok ? ns.set(pack, value, couponKey) : result;
-    });
+      .then(function(result) {
+        return result.ok ? ns.set(pack, value, couponKey) : result;
+      });
 
   };
 
@@ -1431,9 +1410,9 @@ var Process = (function(ns) {
     // now we can set it
 
     return ns.checkAccount(pack)
-    .then (function (result) {
-      return result.ok ? ns.get(pack, couponKey) : result;
-    });
+      .then(function(result) {
+        return result.ok ? ns.get(pack, couponKey) : result;
+      });
   };
 
   /**
@@ -1478,11 +1457,11 @@ var Process = (function(ns) {
   };
 
   function getCipher_(privateKey) {
-    return crypto.createCipher(ns.settings.cryptoAlgo, env_.effexMasterSeed+ns.settings.cryptoSeed + privateKey);
+    return crypto.createCipher(ns.settings.cryptoAlgo, env_.effexMasterSeed + ns.settings.cryptoSeed + privateKey);
   }
 
   function getDecipher_(privateKey) {
-    return crypto.createDecipher(ns.settings.cryptoAlgo, env_.effexMasterSeed+ns.settings.cryptoSeed + privateKey);
+    return crypto.createDecipher(ns.settings.cryptoAlgo, env_.effexMasterSeed + ns.settings.cryptoSeed + privateKey);
   }
 
   function encryptText_(text, privateKey) {
@@ -1581,17 +1560,17 @@ var Process = (function(ns) {
       }
     }
     // now we need to check that all that is ok to do . ie. the account is operational
-    return ns.checkBoss (pack, params.bosskey)
-    .then (function (pack) {
-      return ns.checkAccount(pack);
-    })
-    .then (function (result) {
-      if (!result.ok) {
-        result.keys =[];
-      }
-      return result;
-    });
-    
+    return ns.checkBoss(pack, params.bosskey)
+      .then(function(pack) {
+        return ns.checkAccount(pack);
+      })
+      .then(function(result) {
+        if (!result.ok) {
+          result.keys = [];
+        }
+        return result;
+      });
+
   };
 
   /**
@@ -1601,11 +1580,11 @@ var Process = (function(ns) {
    * @return {boolean}
    */
   function canWrite_(pack, ob) {
-    
-    var can = 
-      (!ob && pack.writer) ||  // we have a pack writer and there is no previous .. ie.. writing for the first time
-      (ob && pack.updater && ((pack.updater === ob.owner ) || ob.updaters.indexOf(pack.updater) != -1)) || // the updater is the owner, or allowed
-      (pack.writer === ob.owner);    /// the owner can do what he wants     
+
+    var can =
+      (!ob && pack.writer) || // we have a pack writer and there is no previous .. ie.. writing for the first time
+      (ob && pack.updater && ((pack.updater === ob.owner) || ob.updaters.indexOf(pack.updater) != -1)) || // the updater is the owner, or allowed
+      (pack.writer === ob.owner); /// the owner can do what he wants     
 
     return can;
 
@@ -1618,8 +1597,8 @@ var Process = (function(ns) {
    * @return {boolean}
    */
   function canRead_(pack, ob) {
-    return ob && (pack.reader === ob.owner || pack.reader === ob.writer || 
-      (ob.updaters && ob.updaters.indexOf(pack.reader) !== -1) || 
+    return ob && (pack.reader === ob.owner || pack.reader === ob.writer ||
+      (ob.updaters && ob.updaters.indexOf(pack.reader) !== -1) ||
       (ob.readers && ob.readers.indexOf(pack.reader) !== -1));
   }
 
@@ -1648,7 +1627,7 @@ var Process = (function(ns) {
    * @param {object} pack the package
    * @return {object} the pack
    */
-  ns.errify = function (test, code, error, pack) {
+  ns.errify = function(test, code, error, pack) {
 
     // if the test is not truthy then its an error
     if (!test) {
@@ -1673,7 +1652,7 @@ function start() {
   console.log('starting');
   // get ready
   Process.init();
-console.log('init done');
+  console.log('init done');
   // start listening
   App.init();
 
@@ -1706,7 +1685,7 @@ function RateManager(limiters, redisClient) {
       },
 
       incr: function(key, expiresec, incrValue) {
-        
+
         return new Promise(function(resolve, reject) {
           if (!cache_.hasOwnProperty(key)) {
             cache_[key] = 0;
