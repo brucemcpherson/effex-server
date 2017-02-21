@@ -7,8 +7,8 @@ var AppConfigs = (function(ns) {
 
     ns.load = function (appDefaults) {
       nconf.defaults(appDefaults)
-        .file({ file: 'config.json' })
         .env()
+        .file({ file: 'config.json' })
         .load();
       return nconf;        
     };

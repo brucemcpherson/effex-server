@@ -772,12 +772,15 @@ var Process = (function(ns) {
 
     // check we got them all
     if (Object.keys(env_).some(function(d) {
-        return !env_[d]
+        return !env_[d];
       })) {
       console.log('missing required env variables', env_);
       process.exit(1);
     }
-
+    
+    console.log('looking for redis at:',env_.redisIp, ":",env_.redisPort);
+    console.log('running on:',env_.expressHost, ":",env_.expressPort);
+    
     // need stuff for decoding coupons (apikeys)
     var c = require("./coupon.js");
     coupon_ = new c(env_.effexAlgo);
