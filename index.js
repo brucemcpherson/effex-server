@@ -13,7 +13,7 @@ var express = require('express');
 var app = express();
 var cors = require('cors');
 var bodyParser = require('body-parser');
-//var morgan = require("morgan");
+var morgan = require("morgan");
 var appConfigs = require('./appConfigs.js');
 
 var env_;
@@ -32,7 +32,7 @@ var App = (function(ns) {
         });
     };
     // if using logger...
-    //next();
+    next();
   }
 
 
@@ -49,7 +49,7 @@ var App = (function(ns) {
     app.use(bodyParser.urlencoded({ // to support URL-encoded bodies
       extended: false
     }));
-    //app.use(morgan('combined'));
+    app.use(morgan('combined'));
 
     app.listen(env_.expressPort, env_.expressHost); //, process.env.IP);
 
@@ -81,7 +81,7 @@ var App = (function(ns) {
             apikey: "needed for creating a bosskey - will be checked against account for validity"
           }
         }
-      }))
+      }));
     });
 
     //---this is admin and will be hidden in the final thing
@@ -755,8 +755,8 @@ var Process = (function(ns) {
   ns.init = function() {
 
     appConfigs.load({
-      PORT: "8080",
-      IP: "0.0.0.0"
+      PORT: process.env.PORT || 8080,
+      IP: process.env.IP || "0.0.0.0"
     });
 
     // need env variables
@@ -797,16 +797,21 @@ var Process = (function(ns) {
         db: ns.settings.db[db],
         password: env_.redisPass,
         port: env_.redisPort,
-        host: env_.redisIp
+        host: env_.redisIp,
+        showFriendlyErrorStack:true
       };
 
       try {
         var red = new redis(p);
+        red.on ("error", function(error) {
+          console.log ('failed to open redis', error);
+          process.exit(2);
+        });
         return red;
       }
       catch (err) {
         console.log('failed to get redis handle', err);
-        process.exit();
+        process.exit(1);
       }
     }
 
