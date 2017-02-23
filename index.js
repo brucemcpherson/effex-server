@@ -53,6 +53,25 @@ var App = (function(ns) {
 
     app.listen(env_.expressPort, env_.expressHost); //, process.env.IP);
 
+    // appengine health check
+    app.get('/_ah/health', function(req, res) {
+      res.prom(Process.ping());
+    });
+    
+    // appengine start
+    app.get('/_ah/start', function(req, res) {
+      // nothing to do here
+      res.prom(Promise.resolve('ok'));
+    });
+    
+    // appengine stop
+    app.get('/_ah/stop', function(req, res) {
+      // no need to close redis specifically
+      process.exit (0);
+      res.prom(Promise.resolve('ok'));
+    });
+    
+    
     // respond with api help when request with no stuff is made
     app.get('/', function(req, res) {
       res.prom(Promise.resolve({
