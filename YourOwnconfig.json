@@ -3,5 +3,6 @@
     "REDIS_PORT":"<your redis port>",
     "REDIS_IP":"<your redis ip>",
     "EFFEX_MASTER_SEED":"<some random string to encrypt with",
-    "EFFEX_ALGO":"<some random string to generate coupons with"
+    "EFFEX_ALGO":"<some random string to generate coupons with",
+    "EFFEX_ADMIN":"<some string thats required as a password for admin activities"
 }

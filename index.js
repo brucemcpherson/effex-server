@@ -3,12 +3,16 @@
  * get baseurl for API info
  */
 // restart redis - sudo service redis-server start
-// these can be in config.json or as environment variablesvi set in ~/.bashrc
+// these can be in config.json (better) or as environment variablesvi set in ~/.bashrc
+
 //export REDIS_PASS=<redis password>
 //export REDIS_PORT=<redis port>
 //export REDIS_IP=<ip number of redis server>
 //export EFFEX_MASTER_SEED=<some string to use for encryption>
 //export EFFEX_ALGO=<some string to use to generate coupons>
+//export EFFEX_ADMIN=<some admin key that can be used by a client to accss admin functions>
+
+
 var express = require('express');
 var app = express();
 var cors = require('cors');
@@ -27,11 +31,9 @@ var App = (function(ns) {
           res.json(result);
         })
         .catch(function(error) {
-          console.log('dispatching error', error);
           res.json(error);
         });
     };
-    // if using logger...
     next();
   }
 
@@ -72,6 +74,17 @@ var App = (function(ns) {
     });
     
     
+    app.get('/info', function(req, res) {
+      res.prom(Promise.resolve({
+        ok: true,
+        code: 200,
+        info: {
+          api:'effex-api',
+          version:'1.0'   
+        }}));
+      });
+    
+          
     // respond with api help when request with no stuff is made
     app.get('/', function(req, res) {
       res.prom(Promise.resolve({
@@ -109,7 +122,7 @@ var App = (function(ns) {
 
       var params = Process.squashParams(req);
       var pack = Process.getCoupon(req);
-
+      
       // since we've just created this, then push in the lock code as the unlock code to decode it
       params.unlock = params.lock;
 
@@ -117,6 +130,8 @@ var App = (function(ns) {
 
         // must have a uid
         pack = Process.errify(params.apikey, 401, "an apikey is needed to create a boss key", pack);
+        pack = Process.checkAdmin (params.admin, pack);
+        
         if (!pack.ok) {
           resolve(pack);
         }
@@ -172,7 +187,7 @@ var App = (function(ns) {
 
     });
 
-    // TODO -- this looks wrong ... prune any boss keys associated with an account .. in other words, delete boss keys for an account
+    // prune any boss keys associated with an account .. in other words, delete boss in the payload
     app.put("/admin/bosses", function(req, res) {
       res.prom(Process.removeBosses(req));
     });
@@ -188,7 +203,13 @@ var App = (function(ns) {
     });
 
     app.get("/admin/account/:accountid", function(req, res) {
-      res.prom(Process.getAccount(req.params.accountid));
+      var pack = Process.checkAdmin (req.params.admin);
+      if (!pack.ok) {
+        res.prom(Promise.resolve (pack));
+      }
+      else {
+        res.prom(Process.getAccount(req.params.accountid));
+      }
     });
 
     // get all  the stats for all users
@@ -473,6 +494,7 @@ var Process = (function(ns) {
 
     // check we have the account id
     ns.errify(pack.accountId, 400, "accountid required", pack);
+    pack = ns.checkAdmin (params.admin, pack);
     if (!pack.ok) {
       return Promise.resolve(pack);
     }
@@ -506,6 +528,7 @@ var Process = (function(ns) {
     });
 
     ns.errify(keys, 400, "no keys supplied to delete", pack);
+    pack = ns.checkAdmin (params.admin, pack);
     if (!pack.ok) {
       return Promise.resolve(pack);
     }
@@ -552,7 +575,8 @@ var Process = (function(ns) {
       accountId: params.accountid
     });
     ns.errify(pack.accountId, 400, "accountid required", pack);
-
+    pack = ns.checkAdmin (params.admin, pack);
+    
     if (pack.ok) {
       return redisAccounts_.del(pack.accountId)
         .then(function(result) {
@@ -609,6 +633,11 @@ var Process = (function(ns) {
       return Promise.resolve(pack);
     }
   };
+  
+  ns.checkAdmin = function (key , pack) {
+    return ns.errify(key === env_.adminKey,401,"You need to provide an admin key for this operation",pack || {ok:true});
+  };
+  
   /**
    * register an account in redis
    */
@@ -626,7 +655,8 @@ var Process = (function(ns) {
 
     ns.errify(pack.authId, 400, "authid required", pack);
     ns.errify(pack.accountId, 400, "accountid required", pack);
-
+    ns.checkAdmin (params.admin, pack);
+    
     if (!pack.ok) {
       return Promise.resolve(pack);
     }
@@ -647,7 +677,10 @@ var Process = (function(ns) {
   ns.statsGet = function(req) {
     // the keys to write this against
     var params = ns.squashParams(req);
-
+    var pack = ns.checkAdmin (params.admin);
+    if (!pack.ok) {
+      return Promise.resolve (pack);
+    }
     var accountId = params.accountid;
     var start = params.start;
     var finish = params.finish;
@@ -720,6 +753,8 @@ var Process = (function(ns) {
    */
   ns.getAccount = function(accountId) {
 
+
+    
     return redisAccounts_.get(accountId)
       .then(function(result) {
         return Promise.resolve(result ? decryptText_(result, env_.effexMasterSeed + ns.settings.accountSeed + accountId) : result);
@@ -786,7 +821,8 @@ var Process = (function(ns) {
       effexMasterSeed: appConfigs.get("EFFEX_MASTER_SEED"),
       effexAlgo: appConfigs.get("EFFEX_ALGO"),
       expressPort: appConfigs.get("PORT"),
-      expressHost: appConfigs.get("IP")
+      expressHost: appConfigs.get("IP"),
+      adminKey: appConfigs.get ("EFFEX_ADMIN")
     };
 
     // check we got them all
