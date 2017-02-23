@@ -26,17 +26,27 @@ var App = (function(ns) {
 
   // this is a middleware to handle promises in the router
   function prommy(req, res, next) {
-    res.prom = function(prom) {
+    res.prom = function(prom, contentType) {
       prom.then(function(result) {
-          res.json(result);
+          doRes (result, contentType, 200);
         })
         .catch(function(error) {
-          res.json(error);
+          doRes (error , contentType , 500);
         });
     };
     next();
+    
+    function doRes (message,contentType, status) {
+      if (contentType) {
+        res.set('Content-Type', contentType);
+        res.status(status).send('ok');            
+      }
+      else {
+        res.json(message);
+      }
+    }
   }
-
+  
 
   /**
    * call to kick off the routing listeners
@@ -57,20 +67,24 @@ var App = (function(ns) {
 
     // appengine health check
     app.get('/_ah/health', function(req, res) {
-      res.prom(Process.ping());
+      res.prom(
+        Process.ping()
+        .then (function (result){
+          if (!result.ok) throw 'bad';
+          return 'ok';
+        }),"text/plain");
     });
     
     // appengine start
     app.get('/_ah/start', function(req, res) {
       // nothing to do here
-      res.prom(Promise.resolve('ok'));
+      res.prom(Promise.resolve('ok'),"text/plain");
     });
     
     // appengine stop
     app.get('/_ah/stop', function(req, res) {
       // no need to close redis specifically
-      process.exit (0);
-      res.prom(Promise.resolve('ok'));
+      res.prom(Promise.resolve('ok'),"text/plain");
     });
     
     
