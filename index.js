@@ -56,13 +56,14 @@ var App = (function(ns) {
     // does the interactions and runs the server
     // pick up ports from c9 env variables
     app.use(cors());
-    app.use(prommy);
+    
     app.use(bodyParser.json()); // to support JSON-encoded bodies
     app.use(bodyParser.urlencoded({ // to support URL-encoded bodies
       extended: false
     }));
     app.use(morgan('combined'));
-
+    app.use(prommy);
+    
     app.listen(env_.expressPort, env_.expressHost); //, process.env.IP);
 
     // appengine health check
@@ -94,7 +95,7 @@ var App = (function(ns) {
         code: 200,
         info: {
           api:'effex-api',
-          version:'1.0'   
+          version:'1.01'   
         }}));
       });
     
@@ -105,6 +106,7 @@ var App = (function(ns) {
         ok: true,
         code: 200,
         info: {
+          registerAlias: "/:writerkey/:key/alias/:alias/:id - creates an alias that can be used by this key for data items",
           getKey: "/:bosskey/:mode - mode can be reader or writer - returns a key that can be used",
           getValue: "/reader/:readerkey/:id - returns a value for the given id (GET)",
           insertValue: "/writer/:writerkey - with the data parameter (GET) or post body (POST)",
@@ -112,6 +114,7 @@ var App = (function(ns) {
           remove: "/writer/:writerkey/:id - remove the item (DELETE)",
           validate: "/validate/:key - validates any key",
           ping: "/ping - checks the service is alive",
+          info: "/info - get service info",
           quotas: "/quotas - get all the service quotas",
           parameters: {
             general: "callback=jsonpcallback",
@@ -273,11 +276,14 @@ var App = (function(ns) {
     app.get("/:bosskey/:mode", function(req, res) {
       res.prom(Process.reqGetKey(req));
     });
-
-
+    
+    // this is asking for an alias to be registered for 
+    app.get("/:writerkey/:key/alias/:alias/:id", function(req, res) {
+      res.prom(Process.registerAlias(req));
+    });
+    
     // the request was a mess
     app.use(function(req, res) {
-      console.log('received unrecognizable url', req.headers.referer);
       res.prom (Promise.resolve({
         ok: false,
         code: 404,
@@ -297,7 +303,7 @@ var App = (function(ns) {
 var Process = (function(ns) {
 
   var crypto = require('crypto');
-  var coupon_, redisClient_, redis, lucky_, redisAdmin_, redisRate_, redisStats_, redisBosses_, redisAccounts_;
+  var coupon_, redisClient_, redis, lucky_, redisAdmin_, redisRate_, redisStats_, redisBosses_, redisAccounts_, redisAlias_;
 
   ns.settings = {
 
@@ -467,6 +473,7 @@ var Process = (function(ns) {
     accountPrefix: "ac-",
     itemPrefix: "it-",
     statPrefix: "sw-",
+    aliasPrefix: "ap-",
     db: {
       stats: 3,
       exchange: 2,
@@ -474,6 +481,7 @@ var Process = (function(ns) {
       rate: 0,
       bosses: 4,
       accounts: 5,
+      alias:6,
       password: "mybo0xnbunieli1eso0qqve444rtheSeaAnd-24#the0ocEan-4#12#$--cafI9£4ax3"
     },
 
@@ -890,7 +898,7 @@ var Process = (function(ns) {
     redisStats_ = redisConf_('stats');
     redisBosses_ = redisConf_('bosses');
     redisAccounts_ = redisConf_('accounts');
-
+    redisAlias_ = redisConf_ ('alias');
 
     // need a rate manager for each possible plan
     //var rm = require('./ratemanager.js');
@@ -952,15 +960,17 @@ var Process = (function(ns) {
    * @param {string} couponKey for stats
    * @return {Promise} the updated pack
    */
-  ns.remove = function(pack, couponKey) {
+  ns.remove = function(pack, couponKey, params) {
 
     return ns.settings.rateManagers[pack.plan].getSlot(pack.accountId)
       .then(function(passed) {
         rlify_(passed, pack);
         if (pack.ok) {
-          return ns.read(ns.getPrivateKey(pack.accountId, pack.id))
-            .then(function(result) {
-
+          return dealWithAlias_ (pack,params)
+          .then (function (pack){
+            return ns.read(ns.getPrivateKey(pack.accountId, pack.id));
+          })
+          .then(function(result) {
               //parse it
               var ob = obify_(result, pack);
               ns.statify(pack.accountId, couponKey, "remove", 0);
@@ -1381,7 +1391,17 @@ var Process = (function(ns) {
 
     // get and validate the apikey
     var params = paramSquash_(req);
-    var data = params.data;
+    var s = params.data;
+    var data;
+    // lets make that into an object if poss
+    try {
+      data = JSON.parse (s);
+    }
+    catch (err) {
+      data = s;
+    }
+    console.log(data);
+
     var pack = ns.getCouponPack(params.writer || params.updater, params);
 
     // get rid of invalid apikey
@@ -1390,8 +1410,10 @@ var Process = (function(ns) {
     }
 
     // get rid of no writers
-    if (pack.type !== 'writer' && pack.type !== 'updater') {
-      ns.errify(false, 401, "You need a valid writer or updater key to write to the exchange:" + pack.type, pack);
+    if (pack.type !== 'writer' && (pack.type !== 'updater' || !params.id) ) {
+      ns.errify(false, 401, (pack.id ? 
+       "You need a writer or updater key to update items-" : "You need an updater key to update items-" ) 
+       + pack.type, pack);
       return Promise.resolve(pack);
     }
 
@@ -1440,10 +1462,13 @@ var Process = (function(ns) {
     }
     pack.lifetime = params.lifetime ? parseInt(params.lifetime, 10) : 0;
 
-    // now we can set it
-    return ns.checkAccount(pack)
-      .then(function(result) {
-        return result.ok ? ns.set(pack, value, couponKey) : result;
+    // now we can set it, but first we have to check that the account is good and if there's an alias, the item exists
+    return Promise.all ([ns.checkAccount(pack),  pack.id ? dealWithAlias_ (pack,params): Promise.resolve (pack)])
+      .then(function(results) {
+        
+        return results.every(function(d) {return d.ok}) ? 
+          ns.set(pack, value, couponKey) : 
+          results.filter(function(d) {return !d.ok;})[0];
       });
 
   };
@@ -1455,8 +1480,18 @@ var Process = (function(ns) {
    */
   ns.reqGet = function(req) {
     var params = paramSquash_(req);
-    var data = params.data;
 
+    var s = params.data;
+    var data;
+    // lets make that into an object if poss
+    try {
+      data = JSON.parse (s);
+    }
+    catch (err) {
+      data = s;
+    }
+    
+    
     // get and validate the apikey
     var pack = ns.getCouponPack(params.reader, params);
 
@@ -1485,13 +1520,40 @@ var Process = (function(ns) {
     }
 
     // now we can set it
-
-    return ns.checkAccount(pack)
-      .then(function(result) {
-        return result.ok ? ns.get(pack, couponKey) : result;
+    return Promise.all ([ns.checkAccount(pack), dealWithAlias_ (pack,params) ])
+      .then(function(results) {
+        return results.every(function (d) { return d.ok;})  ? ns.get(pack, couponKey) : results[0].ok ? results[1] : results[0];
       });
   };
 
+  function dealWithAlias_ (pack,params) {
+    // check the id is valid
+   
+    return new Promise (function (resolve, reject) {
+      // nothing to do
+      if (!pack.id) {
+        resolve (pack);
+      }
+      else {
+        var idPack = ns.getCouponPack(pack.id, params);
+        if (!idPack.ok) {
+          // maybe its an alias
+          var key = ns.settings.aliasPrefix + (pack.reader||pack.writer||pack.updater) + "-" + pack.id;
+          redisAlias_.get(key)
+          .then(function(result) {
+            if (result) {
+              pack.alias = pack.id;
+              pack.id = decryptText_(result, key);
+            }
+            resolve(pack);
+          });
+        }
+        else {
+          resolve (pack);
+        }
+      }
+    });
+  }
   /**
    * handles the removing of an item
    * @param {request} req
@@ -1529,7 +1591,7 @@ var Process = (function(ns) {
     }
 
     // now we can remove it
-    return ns.remove(pack, couponKey);
+    return ns.remove(pack, couponKey,params);
 
   };
 
@@ -1567,6 +1629,64 @@ var Process = (function(ns) {
       return type === d.type && apiSeed.plan === d.plan;
     })[0];
   }
+  
+  
+  /**
+   * asking the api to reigister an alias for a given key
+   * @param {request} req
+   * @return {Promise}
+   */
+  ns.registerAlias = function(req) {
+    var params = paramSquash_(req);
+    
+    // check all the keys make sense
+    var pack = ns.getCouponPack(params.writer, params);
+    if (!pack.ok) return Promise.resolve (pack);
+    
+    if (!ns.checkAccount(pack)) return Promise.resolve (pack);
+    var keyPack = ns.getCouponPack (params.key , params);
+    if (!keyPack.ok) return Promise.resolve (keyPack);
+    
+    var idPack = ns.getCouponPack (params.id , params);
+    if (!idPack.ok) return Promise.resolve (idPack);
+    
+    // now figure out expiration
+    var nDays = params.days ? parseInt(params.days, 10) : 0;
+    var nSeconds = params.seconds ? parseInt(params.seconds, 10) : 0;
+
+    // if nDays are specified then use that otherwise use the date of the key
+    var maxTime = new Date(keyPack.validtill).getTime();
+    var now = new Date();
+    var target = Math.min (nDays ? coupon_.addDate(now, "Date", nDays).getTime() :
+            (nSeconds ? coupon_.addDate(now, "Seconds", nSeconds).getTime() : maxTime), maxTime);
+
+    // make a new pack
+    var aliasPack = {
+      type: "alias",
+      plan: pack.plan,
+      lockValue: (params.lock || ""),
+      ok: true,
+      validtill: new Date(target).toISOString(),
+      key: keyPack.key,
+      alias:params.alias,
+      id:params.id,
+      accountId: keyPack.accountId
+    };
+    
+    
+    // write to store
+    var key = ns.settings.aliasPrefix + aliasPack.key + "-" + aliasPack.alias;
+    var text = encryptText_(aliasPack.id, key);
+
+
+    return redisAlias_.set(key, text, "EX", Math.round (target/1000))
+    .then (function(result) {
+      ns.statify(aliasPack.accountId, aliasPack.key, "set", text.length);
+      aliasPack.code = 201;
+      return aliasPack;
+    });
+  };
+    
   /**
    * asking the api to generate a key and validate the apikey
    * @param {request} req
