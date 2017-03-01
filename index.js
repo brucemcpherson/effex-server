@@ -17,7 +17,7 @@ var express = require('express');
 var app = express();
 var cors = require('cors');
 var bodyParser = require('body-parser');
-var morgan = require("morgan");
+//var morgan = require("morgan");
 var appConfigs = require('./appConfigs.js');
 
 var env_;
@@ -61,7 +61,7 @@ var App = (function(ns) {
     app.use(bodyParser.urlencoded({ // to support URL-encoded bodies
       extended: false
     }));
-    app.use(morgan('combined'));
+    //app.use(morgan('combined'));
     app.use(prommy);
     
     app.listen(env_.expressPort, env_.expressHost); //, process.env.IP);
@@ -1670,7 +1670,8 @@ var Process = (function(ns) {
       key: keyPack.key,
       alias:params.alias,
       id:params.id,
-      accountId: keyPack.accountId
+      accountId: keyPack.accountId,
+      writer:pack.key
     };
     
     
