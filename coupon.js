@@ -75,7 +75,7 @@ module.exports =  function (algo) {
     var valid,c;
     try {
       c = getCode_ (salt, matches[0], matches[1] + matches[2], 0 , true);
-      valid = c.coupon === coupon;
+      valid = coupon && c.coupon === coupon;
     }
     catch (err) {
       valid = false;

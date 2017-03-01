@@ -278,7 +278,7 @@ var App = (function(ns) {
     });
     
     // this is asking for an alias to be registered for 
-    app.get("/:writerkey/:key/alias/:alias/:id", function(req, res) {
+    app.get("/:writer/:key/alias/:alias/:id", function(req, res) {
       res.prom(Process.registerAlias(req));
     });
     
@@ -1400,7 +1400,7 @@ var Process = (function(ns) {
     catch (err) {
       data = s;
     }
-    console.log(data);
+    
 
     var pack = ns.getCouponPack(params.writer || params.updater, params);
 
@@ -1643,49 +1643,54 @@ var Process = (function(ns) {
     var pack = ns.getCouponPack(params.writer, params);
     if (!pack.ok) return Promise.resolve (pack);
     
-    if (!ns.checkAccount(pack)) return Promise.resolve (pack);
-    var keyPack = ns.getCouponPack (params.key , params);
-    if (!keyPack.ok) return Promise.resolve (keyPack);
+    return ns.checkAccount(pack)
+    .then (function (pack){
+      
+      if (!pack.ok) return pack;
+      
+      var keyPack = ns.getCouponPack (params.key , params);
+      if (!keyPack.ok) return keyPack;
+        
+      var idPack = ns.getCouponPack (params.id , params);
+      if (!idPack.ok) return idPack;
+        
+      // now figure out expiration
+      var nDays = params.days ? parseInt(params.days, 10) : 0;
+      var nSeconds = params.seconds ? parseInt(params.seconds, 10) : 0;
     
-    var idPack = ns.getCouponPack (params.id , params);
-    if (!idPack.ok) return Promise.resolve (idPack);
+      // if nDays are specified then use that otherwise use the date of the key
+      var maxTime = new Date(keyPack.validtill).getTime();
+      var now = new Date();
+      var target = Math.min (nDays ? coupon_.addDate(now, "Date", nDays).getTime() :
+              (nSeconds ? coupon_.addDate(now, "Seconds", nSeconds).getTime() : maxTime), maxTime);
     
-    // now figure out expiration
-    var nDays = params.days ? parseInt(params.days, 10) : 0;
-    var nSeconds = params.seconds ? parseInt(params.seconds, 10) : 0;
+      // make a new pack
+      var aliasPack = {
+        type: "alias",
+        plan: pack.plan,
+        lockValue: (params.lock || ""),
+        ok: true,
+        validtill: new Date(target).toISOString(),
+        key: keyPack.key,
+        alias:params.alias,
+        id:params.id,
+        accountId: keyPack.accountId,
+        writer:pack.key
+      };
 
-    // if nDays are specified then use that otherwise use the date of the key
-    var maxTime = new Date(keyPack.validtill).getTime();
-    var now = new Date();
-    var target = Math.min (nDays ? coupon_.addDate(now, "Date", nDays).getTime() :
-            (nSeconds ? coupon_.addDate(now, "Seconds", nSeconds).getTime() : maxTime), maxTime);
-
-    // make a new pack
-    var aliasPack = {
-      type: "alias",
-      plan: pack.plan,
-      lockValue: (params.lock || ""),
-      ok: true,
-      validtill: new Date(target).toISOString(),
-      key: keyPack.key,
-      alias:params.alias,
-      id:params.id,
-      accountId: keyPack.accountId,
-      writer:pack.key
-    };
     
-    
-    // write to store
-    var key = ns.settings.aliasPrefix + aliasPack.key + "-" + aliasPack.alias;
-    var text = encryptText_(aliasPack.id, key);
+      // write to store
+      var key = ns.settings.aliasPrefix + aliasPack.key + "-" + aliasPack.alias;
+      var text = encryptText_(aliasPack.id, key);
 
-
-    return redisAlias_.set(key, text, "EX", Math.round (target/1000))
-    .then (function(result) {
-      ns.statify(aliasPack.accountId, aliasPack.key, "set", text.length);
-      aliasPack.code = 201;
-      return aliasPack;
+      return redisAlias_.set(key, text, "EX", Math.round (target/1000))
+      .then (function(result) {
+        ns.statify(aliasPack.accountId, aliasPack.key, "set", text.length);
+        aliasPack.code = 201;
+        return aliasPack;
+      });
     });
+ 
   };
     
   /**
