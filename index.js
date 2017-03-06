@@ -1212,6 +1212,7 @@ var Process = (function(ns) {
       return ns.settings.rateManagers[pack.plan].getSlot(pack.accountId, "quota", s.length)
         .then(function(passed) {
           rlify_(passed, pack);
+          pack.size = s.length;
           return pack.ok ? ns.write(ns.getPrivateKey(pack.accountId, pack.id), s, pack.lifetime) : pack;
         })
         .then(function(result) {
