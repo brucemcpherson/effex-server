@@ -22,7 +22,7 @@ var appConfigs = require('./appConfigs.js');
 
 var env_;
 
-var App = (function(ns) {
+var App = (function(nsa) {
 
   // this is a middleware to handle promises in the router
   function prommy(req, res, next) {
@@ -51,7 +51,7 @@ var App = (function(ns) {
   /**
    * call to kick off the routing listeners
    */
-  ns.init = function() {
+  nsa.init = function() {
 
     // does the interactions and runs the server
     // pick up ports from c9 env variables
@@ -110,6 +110,7 @@ var App = (function(ns) {
           getKey: "/:bosskey/:mode - mode can be reader or writer - returns a key that can be used",
           getValue: "/reader/:readerkey/:id - returns a value for the given id (GET)",
           insertValue: "/writer/:writerkey - with the data parameter (GET) or post body (POST)",
+          insertValueWithAlias: "/writer/:writerkey/alias/:alias - with the data parameter (GET) or post body (POST) and assign alias",
           updateValue: "/updater/:updaterkey/:id - with the data parameter (GET) or post body (POST)",
           remove: "/writer/:writerkey/:id - remove the item (DELETE)",
           validate: "/validate/:key - validates any key",
@@ -265,6 +266,15 @@ var App = (function(ns) {
         res.prom(Process.reqSet(req));
       });
 
+    // this is a new record with an alias
+    app.route("/writer/:writer/alias/:alias")
+      .get(function(req, res) {
+        res.prom(Process.reqSet(req));
+      })
+      .post(function(req, res) {
+        res.prom(Process.reqSet(req));
+      });
+      
     // this is a reader
     app.route("/reader/:reader/:id")
       .get(function(req, res) {
@@ -294,7 +304,7 @@ var App = (function(ns) {
 
   };
 
-  return ns;
+  return nsa;
 })({});
 
 /**
@@ -1097,6 +1107,10 @@ var Process = (function(ns) {
       .then(function(ob) {
         return writeOb_(ob);
       })
+      .then(function(pack){
+        // maybe there are aliase required, but only allowed if there's a writer key as well
+        return pack.alias && pack.writer ? ns.multipleAlias (pack) : pack;
+      })
       .catch(function(err) {
         return Promise.resolve(ns.errify(false, 500, err.toString(), pack));
       });
@@ -1164,7 +1178,7 @@ var Process = (function(ns) {
       var ob = oldOb || {};
       var writer = oldOb ? oldOb.writer : pack.writer;
       var updater = pack.updater;
-
+      
       if (!writer) {
         console.log('should have been a writer', pack, oldOb);
       }
@@ -1428,6 +1442,10 @@ var Process = (function(ns) {
       plan: pack.plan,
       accountId: pack.accountId
     };
+    
+    if (params.alias) {
+      pack.alias = params.alias;
+    }
 
     // check we have something to write, could be in post or params
     var value = data;
@@ -1631,15 +1649,68 @@ var Process = (function(ns) {
     })[0];
   }
   
+  /**
+   * asking the api to reigister an alias for a given key
+   * @param {object} pack
+   * @return {Promise}
+   */
+   
+  ns.multipleAlias = function (pack) {
+
+  console.log('entering multiple',pack);
   
+    // we have to create one for each key in the pack, including the writer
+    var proms = ['updaters','readers']
+    .reduce (function (p,c){
+      (pack[c] || [])
+      .forEach (function (d) {
+        // clone the template
+        var w = JSON.parse(JSON.stringify(p[0]));
+        w.key = d;
+        p.push (w);
+      });
+      return p;
+    },[{
+      id:pack.id,
+      writer:pack.writer,
+      alias:pack.alias,
+      key:pack.writer
+    }])
+    .map (function (d) {
+      return ns.createAlias(d);
+    });
+    
+    // wait for all that happen and check
+    return Promise.all(proms)
+    .then (function (pa){
+      // need to check for errors in any of that
+      var errors = pa.filter(function(d) {
+        return !d.ok;
+      });
+
+      return errors.length ? errors[0] : pack;
+    });
+  };
+
+
+
+
   /**
    * asking the api to reigister an alias for a given key
    * @param {request} req
    * @return {Promise}
    */
-  ns.registerAlias = function(req) {
-    var params = paramSquash_(req);
-    
+  ns.registerAlias = function (req) {
+    return ns.createAlias (paramSquash_(req));
+  };
+  
+  /**
+   * asking the api to reigister an alias for a given key
+   * @param {object} params
+   * @return {Promise}
+   */
+  ns.createAlias = function(params) {
+
     // check all the keys make sense
     var pack = ns.getCouponPack(params.writer, params);
     if (!pack.ok) return Promise.resolve (pack);
@@ -1664,7 +1735,7 @@ var Process = (function(ns) {
       var now = new Date();
       var target = Math.min (nDays ? coupon_.addDate(now, "Date", nDays).getTime() :
               (nSeconds ? coupon_.addDate(now, "Seconds", nSeconds).getTime() : maxTime), maxTime);
-    
+  
       // make a new pack
       var aliasPack = {
         type: "alias",
@@ -1678,7 +1749,7 @@ var Process = (function(ns) {
         accountId: keyPack.accountId,
         writer:pack.key
       };
-
+      
     
       // write to store
       var key = ns.settings.aliasPrefix + aliasPack.key + "-" + aliasPack.alias;
