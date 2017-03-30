@@ -531,7 +531,7 @@ var Process = (function(ns) {
   };
 
   ns.registerBoss = function(pack) {
-console.log('registering boss',pack);
+
     var exp = new Date(pack.validtill).getTime() - new Date().getTime();
     return redisBosses_.set(pack.key, pack.accountId, "EX", exp > 0 ? 10 + Math.round(exp / 1000) : 10)
       .then(function(result) {
@@ -1213,7 +1213,13 @@ console.log('registering boss',pack);
           if (!pack.ok) {
             var lockPack = ns.getCouponPack (result.split(",")[0], {});
             pack.intentExpires = Math.max(0,lockPack.ok ?  Math.ceil((new Date(lockPack.validtill).getTime() - new Date().getTime())/1000): 0);
+            if (!pack.intentExpires) {
+              pack.error ="";
+              pack.ok = true;
+            }
+            
           }
+          
 
         }
         
