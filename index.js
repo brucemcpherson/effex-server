@@ -149,7 +149,7 @@ var App = (function(nsa) {
       var registered = new Promise(function(resolve, reject) {
 
         // must have a uid
-        pack = Process.errify(params.apikey, ns.settings.errors.UNAUTHORIZED, "an apikey is needed to create a boss key", pack);
+        pack = Process.errify(params.apikey, Process.settings.errors.UNAUTHORIZED, "an apikey is needed to create a boss key", pack);
         pack = Process.checkAdmin (params.admin, pack);
         
         if (!pack.ok) {
@@ -531,7 +531,7 @@ var Process = (function(ns) {
   };
 
   ns.registerBoss = function(pack) {
-
+console.log('registering boss',pack);
     var exp = new Date(pack.validtill).getTime() - new Date().getTime();
     return redisBosses_.set(pack.key, pack.accountId, "EX", exp > 0 ? 10 + Math.round(exp / 1000) : 10)
       .then(function(result) {
@@ -1466,7 +1466,7 @@ var Process = (function(ns) {
     });
 
     pack.lockValue = (params.lock || "");
-
+    
     if (pack.ok) {
 
       var nDays = params.days ? parseInt(params.days, 10) : 0;
