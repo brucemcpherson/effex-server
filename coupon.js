@@ -29,7 +29,20 @@ module.exports =  function (algo) {
     if (typeof expiry !== 'number') {
       throw 'date should be a time stamp';
     }
-    extendDays = extendDays || 0;    
+
+    extendDays = extendDays || 0;   
+    
+    if (typeof extendDays !== 'number') {
+      throw 'extenddays should be a number';
+    }
+    
+    if (typeof salt !== 'string') {
+      throw 'salt should be a string';
+    }
+    if (typeof prefix  !== 'string') {
+      throw 'prefix should be a string';
+    }
+    
     var result = getCode_ ( salt, prefix,  expiry.toString(32), extendDays, false);
     return result.coupon;
   };

@@ -128,7 +128,9 @@ var App = (function(nsa) {
             count: "count=number of keys to generate",
             lock: "lock=some code that would be needed to use this key",
             unlock: "unlock=the code that this key was locked with",
-            apikey: "needed for creating a bosskey - will be checked against account for validity"
+            apikey: "needed for creating a bosskey - will be checked against account for validity",
+            intention:"=update to state an intention to update while making a read",
+            intent:"the intent key that was returned by the intention parameter to authorize an update"
           }
         }
       }));
@@ -147,7 +149,7 @@ var App = (function(nsa) {
       var registered = new Promise(function(resolve, reject) {
 
         // must have a uid
-        pack = Process.errify(params.apikey, 401, "an apikey is needed to create a boss key", pack);
+        pack = Process.errify(params.apikey, ns.settings.errors.UNAUTHORIZED, "an apikey is needed to create a boss key", pack);
         pack = Process.checkAdmin (params.admin, pack);
         
         if (!pack.ok) {
@@ -313,10 +315,22 @@ var App = (function(nsa) {
 var Process = (function(ns) {
 
   var crypto = require('crypto');
-  var coupon_, redisClient_, redis, lucky_, redisAdmin_, redisRate_, redisStats_, redisBosses_, redisAccounts_, redisAlias_;
+  var coupon_, redisAlias_ , redisClient_, redis, lucky_,  redisRate_, redisStats_, redisBosses_, redisAccounts_, redisIntent_ ;
 
   ns.settings = {
 
+    errors:{
+      NOT_FOUND:404,
+      BAD_REQUEST:400,
+      UNAUTHORIZED:401,
+      FORBIDDEN:403,
+      CONFLICT:409,
+      INTERNAL:500,
+      OK:200,
+      CREATED:201,
+      ACCEPTED:202,
+      NO_CONTENT:204
+    },
     plans: {
       a: {
         maxSize: .5 * 1000 * 1024,
@@ -403,6 +417,21 @@ var Process = (function(ns) {
       value: "ee.2LX-wkb#",
       plan: "b"
     }, {
+      name: "iak",
+      type: "intent",
+      value: "d.r0L-9-wkb#",
+      plan: "a"
+    }, {
+      name: "ibk",
+      type: "intent",
+      value: "e.2L=X-wkb#",
+      plan: "b"
+    },{
+      name: "ixk",
+      type: "intent",
+      value: "e.2L9wkb#",
+      plan: "x"
+    },{
       name: "uak",
       type: "updater",
       value: "d.r00w6b#",
@@ -484,6 +513,8 @@ var Process = (function(ns) {
     itemPrefix: "it-",
     statPrefix: "sw-",
     aliasPrefix: "ap-",
+    intentPrefix: "in-",
+    intentLifetime:20000,          // intents last for 20 seconds
     db: {
       stats: 3,
       exchange: 2,
@@ -492,6 +523,7 @@ var Process = (function(ns) {
       bosses: 4,
       accounts: 5,
       alias:6,
+      intent:7,
       password: "mybo0xnbunieli1eso0qqve444rtheSeaAnd-24#the0ocEan-4#12#$--cafI9£4ax3"
     },
 
@@ -518,14 +550,14 @@ var Process = (function(ns) {
     var params = paramSquash_(req);
 
     // set up default response
-    var pack = ns.errify(true, 200, 'boss keys', {
+    var pack = ns.errify(true,  ns.settings.errors.OK, 'boss keys', {
       ok: true,
       accountId: params.accountid,
       keys: []
     });
 
     // check we have the account id
-    ns.errify(pack.accountId, 400, "accountid required", pack);
+    ns.errify(pack.accountId, ns.settings.errors.BAD_REQUEST, "accountid required", pack);
     pack = ns.checkAdmin (params.admin, pack);
     if (!pack.ok) {
       return Promise.resolve(pack);
@@ -553,13 +585,13 @@ var Process = (function(ns) {
     var keys = params.data.keys;
 
     // set up default response
-    var pack = ns.errify(true, 200, 'boss keys', {
+    var pack = ns.errify(true, ns.settings.errors.OK, 'boss keys', {
       ok: true,
       accountId: params.accountid,
       keys: keys
     });
 
-    ns.errify(keys, 400, "no keys supplied to delete", pack);
+    ns.errify(keys, ns.settings.errors.BAD_REQUEST, "no keys supplied to delete", pack);
     pack = ns.checkAdmin (params.admin, pack);
     if (!pack.ok) {
       return Promise.resolve(pack);
@@ -570,7 +602,7 @@ var Process = (function(ns) {
 
     return redisBosses_.del(pack.keys)
       .then(function(result) {
-        return ns.errify(result === pack.keys.length, 404, "only found " + result + " keys to delete", pack);
+        return ns.errify(result === pack.keys.length, ns.settings.errors.NOT_FOUND, "only found " + result + " keys to delete", pack);
       });
 
 
@@ -587,7 +619,7 @@ var Process = (function(ns) {
         if (pack.ok && pack.keys.length) {
           return redisBosses_.del(pack.keys)
             .then(function(result) {
-              return ns.errify(result === pack.keys.length, 500, "not all bosses deleted", pack);
+              return ns.errify(result === pack.keys.length, ns.settings.errors.INTERNAL, "not all bosses deleted", pack);
             });
         }
         else {
@@ -602,17 +634,17 @@ var Process = (function(ns) {
    */
   ns.deleteAccount = function(req) {
     var params = paramSquash_(req);
-    var pack = ns.errify(true, 200, 'deleted', {
+    var pack = ns.errify(true, ns.settings.errors.OK, 'deleted', {
       ok: true,
       accountId: params.accountid
     });
-    ns.errify(pack.accountId, 400, "accountid required", pack);
+    ns.errify(pack.accountId, ns.settings.errors.BAD_REQUEST, "accountid required", pack);
     pack = ns.checkAdmin (params.admin, pack);
     
     if (pack.ok) {
       return redisAccounts_.del(pack.accountId)
         .then(function(result) {
-          pack = ns.errify(result === 1, 404, "failed deleting account", pack);
+          pack = ns.errify(result === 1,  ns.settings.errors.NOT_FOUND, "failed deleting account", pack);
           return pack.ok ? ns.pruneBosses(req) : pack;
         });
 
@@ -632,7 +664,7 @@ var Process = (function(ns) {
       if (pack.ok) {
         return redisBosses_.exists(bosskey)
           .then(function(result) {
-            return ns.errify(result, 404, "bosskey " + bosskey + " doesn't exist", pack);
+            return ns.errify(result,  ns.settings.errors.NOT_FOUND, "bosskey " + bosskey + " doesn't exist", pack);
           });
       }
       else {
@@ -648,11 +680,11 @@ var Process = (function(ns) {
     if (pack.ok) {
       return ns.getAccount(pack.accountId)
         .then(function(result) {
-          ns.errify(result, 404, "account doesn't exist", pack);
+          ns.errify(result,  ns.settings.errors.NOT_FOUND, "account doesn't exist", pack);
           if (pack.ok) {
             var ob = JSON.parse(result);
-            ns.errify(ob.active, 404, "accout is not active", pack);
-            ns.errify(!apikey || apikey === ob.authid, 401, "apikey not valid for this account", pack);
+            ns.errify(ob.active,  ns.settings.errors.NOT_FOUND, "accout is not active", pack);
+            ns.errify(!apikey || apikey === ob.authid, ns.settings.errors.FORBIDDEN, "apikey not valid for this account", pack);
             if (!pack.ok) {
               pack.key = "";
               pack.validtill = "";
@@ -667,7 +699,7 @@ var Process = (function(ns) {
   };
   
   ns.checkAdmin = function (key , pack) {
-    return ns.errify(key === env_.adminKey,401,"You need to provide an admin key for this operation",pack || {ok:true});
+    return ns.errify(key === env_.adminKey,ns.settings.errors.UNAUTHORIZED,"You need to provide an admin key for this operation",pack || {ok:true});
   };
   
   /**
@@ -677,7 +709,7 @@ var Process = (function(ns) {
     var params = paramSquash_(req);
     params.data = params.data || {};
 
-    var pack = ns.errify(true, 201, 'created', {
+    var pack = ns.errify(true, ns.settings.errors.CREATED, 'created', {
       ok: true,
       accountId: params.accountid,
       authId: params.data.authid,
@@ -685,8 +717,8 @@ var Process = (function(ns) {
       active: params.data.active
     });
 
-    ns.errify(pack.authId, 400, "authid required", pack);
-    ns.errify(pack.accountId, 400, "accountid required", pack);
+    ns.errify(pack.authId, ns.settings.errors.BAD_REQUEST, "authid required", pack);
+    ns.errify(pack.accountId, ns.settings.errors.BAD_REQUEST, "accountid required", pack);
     ns.checkAdmin (params.admin, pack);
     
     if (!pack.ok) {
@@ -699,7 +731,7 @@ var Process = (function(ns) {
         return pack;
       })
       .catch(function(err) {
-        return ns.errify(false, 500, err, pack);
+        return ns.errify(false, ns.settings.errors.INTERNAL, err, pack);
       });
   };
 
@@ -737,7 +769,7 @@ var Process = (function(ns) {
               });
           }))
           .then(function(pr) {
-            return ns.errify(true, 200, "", {
+            return ns.errify(true, ns.settings.errors.OK, "", {
               chunks: pr.filter(function(d) {
                 return d.start >= start && d.start <= finish;
               }),
@@ -792,7 +824,7 @@ var Process = (function(ns) {
         return Promise.resolve(result ? decryptText_(result, env_.effexMasterSeed + ns.settings.accountSeed + accountId) : result);
       })
       .catch(function(err) {
-        return ns.errify(false, 500, err, {
+        return ns.errify(false, ns.settings.errors.INTERNAL, err, {
           accountId: accountId
         });
       });
@@ -816,7 +848,7 @@ var Process = (function(ns) {
       seconds: pack.lifetime
     });
 
-    ns.errify(coupon && coupon.ok, 500, "failed to generate item id", pack);
+    ns.errify(coupon && coupon.ok, ns.settings.errors.INTERNAL, "failed to generate item id", pack);
     var publicKey = coupon.code || "";
     return {
       private: ns.getPrivateKey(pack.accountId, publicKey),
@@ -903,13 +935,13 @@ var Process = (function(ns) {
     }
 
     redisClient_ = redisConf_('exchange');
-    redisAdmin_ = redisConf_('admin');
     redisRate_ = redisConf_('rate');
     redisStats_ = redisConf_('stats');
     redisBosses_ = redisConf_('bosses');
     redisAccounts_ = redisConf_('accounts');
     redisAlias_ = redisConf_ ('alias');
-
+    redisIntent_ = redisConf_ ('intent');
+    
     // need a rate manager for each possible plan
     //var rm = require('./ratemanager.js');
     var rm = RateManager;
@@ -945,7 +977,7 @@ var Process = (function(ns) {
         return {
           ok: true,
           value: result,
-          code: 200
+          code: ns.settings.errors.OK
         };
       })
       .catch(function(err) {
@@ -961,8 +993,51 @@ var Process = (function(ns) {
     return Promise.resolve({
       quotas: ns.settings.plans,
       ok: true,
-      code: 200
+      code: ns.settings.errors.OK
     });
+  };
+  
+  /**
+   * create an intent
+   * @param {object} pack the pack so far
+   * @return {promise}
+   */
+  ns.createIntent = function (pack) {
+   
+    if (pack.intention) {
+      ns.errify(pack.intention === "update", ns.settings.errors.BAD_REQUEST , "invalid intention parameter " +pack.intention,pack);
+      if (pack.ok) {
+          // the key is the item id - there can only be one intent per id 
+          // the body is the intent authorization + the reader key (which will later be used for checking)
+          // intents are free from a quota point of view hence no statify
+          
+          // need to generate a coupon
+          var seed = ns.settings.seeds.filter (function (d) {
+            return d.type === "intent" && d.plan === pack.plan;
+          })[0];
+          
+          if (ns.errify (seed, ns.settings.errors.INTERNAL , "couldnt find an intent seed for the plan", pack).ok) {
+            var auth = coupon_.generate(
+              seed.value, 
+              new Date().getTime() + ns.settings.intentLifetime, 
+              seed.name, 
+              parseInt(pack.accountId, 32)
+            );
+          var key = ns.settings.intentPrefix+pack.id;
+          // let it live for a few extra seconds, since its the coupon that will be used 
+          // to check for expiration to avoid an unnecessary caceh access
+          return redisIntent_.set(key, auth + "," + pack.reader, "EX", 10 + Math.round(ns.settings.intentLifetime/1000))
+          .then (function (result) {
+            pack.intent = auth;
+            pack.intentExpires = Math.round(ns.settings.intentLifetime / 1000);
+            return pack;
+          });
+
+      }
+      }
+    }
+    return Promise.resolve (pack);
+    
   };
   /**
    * remove a value if allowed
@@ -984,9 +1059,9 @@ var Process = (function(ns) {
               //parse it
               var ob = obify_(result, pack);
               ns.statify(pack.accountId, couponKey, "remove", 0);
-              ns.errify(ob, 404, "item cannot be removed as it does not exist", pack);
+              ns.errify(ob,  ns.settings.errors.NOT_FOUND, "item cannot be removed as it does not exist", pack);
               // make sure we can touch it
-              ns.errify(ob && ob.accountId && pack.accountId === ob.accountId, 500, "account id mismatches key", pack);
+              ns.errify(ob && ob.accountId && pack.accountId === ob.accountId, ns.settings.errors.INTERNAL, "account id mismatches key", pack);
               if (pack.ok && canWrite_(pack, ob) && ob.owner === pack.writer) {
                 // all is good
                 return ns.checkAccount(pack)
@@ -994,9 +1069,9 @@ var Process = (function(ns) {
                     return result.ok ?
                       ns.del(ns.getPrivateKey(pack.accountId, pack.id))
                       .then(function(dr) {
-                        ns.errify(dr, 500, "failed to delete item", pack);
+                        ns.errify(dr, ns.settings.errors.INTERNAL, "failed to delete item", pack);
                         if (pack.ok) {
-                          pack.code = 204;
+                          pack.code = ns.settings.errors.NO_CONTENT;
                         }
                         return pack;
                       }) : result;
@@ -1004,11 +1079,11 @@ var Process = (function(ns) {
               }
               else if (ob) {
 
-                ns.errify(false, 403, "only the owner can remove an item", pack);
+                ns.errify(false, ns.settings.errors.FORBIDDEN, "only the owner can remove an item", pack);
 
               }
               else {
-                ns.errify(false, 404, "unable to delete - item was missing", pack);
+                ns.errify(false,  ns.settings.errors.NOT_FOUND, "unable to delete - item was missing", pack);
               }
               return pack;
             });
@@ -1018,7 +1093,7 @@ var Process = (function(ns) {
         }
       })
       .catch(function(err) {
-        return Promise.resolve(ns.errify(false, 500, (err ? err.toString() : "") + ":caught an error:" + (pack.error || ""), pack));
+        return Promise.resolve(ns.errify(false, ns.settings.errors.INTERNAL, (err ? err.toString() : "") + ":caught an error:" + (pack.error || ""), pack));
       });
   };
 
@@ -1041,30 +1116,34 @@ var Process = (function(ns) {
               //parse it
               var ob = obify_(result, pack);
               ns.statify(pack.accountId, couponKey, "get", result ? result.length : 0);
+              
               // make sure we can touch it
               if (pack.ok && canRead_(pack, ob)) {
                 // all is good
                 pack.value = ob.value;
-                pack.code = 200;
+                pack.code = ns.settings.errors.OK;
                 pack.modified = ob.modified;
+                
+                // create an intent if required
+                return ns.createIntent(pack);
               }
 
               else if (ob) {
-                ns.errify(false, 403, "you are not allowed to read this data", pack);
-                ns.errify(ob.accountId && pack.accountId === ob.accountId, 500, "item account id mismatches key", pack);
+                ns.errify(false, ns.settings.errors.FORBIDDEN, "you are not allowed to read this data", pack);
+                ns.errify(ob.accountId && pack.accountId === ob.accountId, ns.settings.errors.INTERNAL, "item account id mismatches key", pack);
               }
               else {
-                ns.errify(false, 404, "item is missing", pack);
+                ns.errify(false,  ns.settings.errors.NOT_FOUND, "item is missing", pack);
               }
               return pack;
-            })
+            });
         }
         else {
-          return pack;
+          return pack; 
         }
       })
       .catch(function(err) {
-        return Promise.resolve(ns.errify(false, 500, (err ? err.toString() : "") + ":caught an error:" + (pack.error || ""), pack));
+        return Promise.resolve(ns.errify(false, ns.settings.errors.INTERNAL, (err ? err.toString() : "") + ":caught an error:" + (pack.error || ""), pack));
       });
 
   };
@@ -1089,11 +1168,11 @@ var Process = (function(ns) {
 
     // get the plan info
     var plan = ns.settings.plans[pack.plan];
-    ns.errify(plan, 500, "cant find plan info for plan:" + pack.plan, pack);
+    ns.errify(plan, ns.settings.errors.INTERNAL, "cant find plan info for plan:" + pack.plan, pack);
     // set the default lifetime
     if (pack.ok) {
       pack.lifetime = pack.lifetime || plan.lifetime;
-      ns.errify(pack.lifetime <= plan.maxLifetime || plan.maxLifetime === 0, 400,
+      ns.errify(pack.lifetime <= plan.maxLifetime || plan.maxLifetime === 0, ns.settings.errors.BAD_REQUEST,
         "max lifetime for your plan is " + pack.plan.maxLifetime, pack);
     }
 
@@ -1102,21 +1181,85 @@ var Process = (function(ns) {
       return Promise.resolve(null);
     }
 
+    function checkIntention_ (pr) {
+      
+      var ob = pr.ob;
+      var pack= pr.pack;
+      
+      //--no need to check of there's no ob (its new)
+      if (!ob || !pack.ok ) return Promise.resolve ({ob:ob, pack:pack});
+
+      //---if there's an intent, we can check right now if its expired without bothering going to cache
+      if (pack.intent) {
+        var couponPack = ns.getCouponPack(pack.intent, {});  
+        ns.errify (couponPack.code !== ns.settings.errors.UNAUTHORIZED, couponPack.code , "intent key has expired - cant update",pack);
+        ns.errify (couponPack.ok, ns.settings.errors.CONFLICT , "intent key is invalid - cant update", pack);
+      }
+      if (!pack.ok)return Promise.resolve ({ob:ob, pack:pack});
+
+      //---now we need to go to the lock store
+      var key = ns.settings.intentPrefix + pack.id;
+      return redisIntent_.get(key)
+      .then(function(result) {
+        if (result) {
+          
+          //-- if we get here then there's a lock. need to make sure its the same as the intended
+          var who = pack.intent + "," + pack.updater;
+
+          //-- possiblly still hanging around in cache even though the key has actually expired so ignore it
+          ns.errify (result === who ,  ns.settings.errors.CONFLICT , "item is locked by another key" , pack);
+          
+          //-- we can even advise the amount of time to wait to try again if i
+          if (!pack.ok) {
+            var lockPack = ns.getCouponPack (result.split(",")[0], {});
+            pack.intentExpires = Math.max(0,lockPack.ok ?  Math.ceil((new Date(lockPack.validtill).getTime() - new Date().getTime())/1000): 0);
+          }
+
+        }
+        
+        // if there was no lock, but there was an intent, myabe its been used up and deleted
+        else {
+          ns.errify (!pack.intent,ns.settings.errors.CONFLICT,"Intent key has already been used",pack ); 
+          
+        }
+        
+        return {ob:ob, pack:pack};
+      });
+    }
+    
     // two step .. get item if exists, create or update
-    return getExistingThing_()
-      .then(function(ob) {
-        return writeOb_(ob);
+    return getExistingThing_(pack)
+      .then(function(result) {
+        // first we need to check that there's not a lock
+        return checkIntention_ (result);
+      })
+      .then(function (result) {
+        return writeOb_(result);
+      })
+      .then (function (pack){
+        if (!pack.ok || !pack.intent) return pack;
+        
+        // now we need to delete the intent since its now been used
+        var key = ns.settings.intentPrefix + pack.id;
+        return redisIntent_.del (key)
+        .then (function (result) {
+          // im not going to fail if the delete didnt happen
+          // as it may have simply expired in the meantime
+          // but i will write to the log file in case
+          if (!result) console.log ('should have been able to delete intent', key);
+          return Promise.resolve (pack);
+        });
       })
       .then(function(pack){
         // maybe there are aliase required, but only allowed if there's a writer key as well
-        return pack.alias && pack.writer ? ns.multipleAlias (pack) : pack;
+        return pack.alias && pack.writer && pack.ok ? ns.multipleAlias (pack) : pack;
       })
       .catch(function(err) {
-        return Promise.resolve(ns.errify(false, 500, err.toString(), pack));
+        return Promise.resolve(ns.errify(false, ns.settings.errors.INTERNAL, err.toString(), pack));
       });
 
 
-    function getExistingThing_() {
+    function getExistingThing_(pack) {
 
       // this would be new item since no id is specified
       if (!pack.id) {
@@ -1124,7 +1267,7 @@ var Process = (function(ns) {
         var kob = ns.getNewKey(pack);
         pack.id = kob.public;
         // whoever writes this new item will become its owner
-        return Promise.resolve(null);
+        return Promise.resolve({pack:pack, ob:null});
       }
 
 
@@ -1140,35 +1283,37 @@ var Process = (function(ns) {
                 var ob = obify_(result, pack);
 
                 // do a string of error checks - pack gets updated
-                ns.errify(ob, 404, 'item missing ' + pack.id, pack);
+                ns.errify(ob,  ns.settings.errors.NOT_FOUND, 'item missing ' + pack.id, pack);
 
                 ns.errify(ns.settings.allowAccessorChanges || !(pack.readers || pack.updaters),
-                  401, "changing readers or updaters is not allowed", pack);
+                  ns.settings.errors.FORBIDDEN, "changing readers or updaters is not allowed", pack);
 
                 ns.errify(!ob || (pack.writer === ob.owner || !(pack.readers || pack.updaters)),
-                  401, "only the owner can change the readers or updaters", pack);
+                  ns.settings.errors.FORBIDDEN, "only the owner can change the readers or updaters", pack);
 
-                ns.errify(!ob || (ob.accountId && pack.accountId === ob.accountId), 500, "item account id mismatches key", pack);
+                ns.errify(!ob || (ob.accountId && pack.accountId === ob.accountId), ns.settings.errors.INTERNAL, "item account id mismatches key", pack);
                 if (pack.ok) {
                   if (canWrite_(pack, ob)) {
                     pack.modified = ob.modified;
                   }
                   else {
-                    ns.errify(false, 401, "you are not allowed to write to this data", pack);
+                    ns.errify(false, ns.settings.errors.FORBIDDEN, "you are not allowed to write to this data", pack);
                   }
                 }
-                return ob;
+                return {pack:pack, ob:ob};
               });
           }
           else {
-            return null;
+            return {pack:pack, ob:null};
           }
         });
     }
 
-    function writeOb_(oldOb) {
+    function writeOb_(pr) {
 
-
+      var pack = pr.pack;
+      var oldOb = pr.ob;
+      
       // but dont bother if something has gone wrong
       if (!pack.ok) {
         return Promise.resolve(pack);
@@ -1177,8 +1322,7 @@ var Process = (function(ns) {
       // the base item      
       var ob = oldOb || {};
       var writer = oldOb ? oldOb.writer : pack.writer;
-      var updater = pack.updater;
-      
+
       if (!writer) {
         console.log('should have been a writer', pack, oldOb);
       }
@@ -1216,23 +1360,26 @@ var Process = (function(ns) {
 
 
       // allow 1k of overage forcontrol stuff
-      ns.errify(plan.maxSize > s.length + 1024, 400, "max size for your plan is " + plan.maxSize, pack);
+      ns.errify(plan.maxSize > s.length + 1024, ns.settings.errors.BAD_REQUEST, "max size for your plan is " + plan.maxSize, pack);
       if (!pack.ok) {
         return Promise.resolve(pack);
       }
 
       // if after all that we're still good to go, we wont count this as an access, since we did it with the read
       // but we will check the write quota
-      return ns.settings.rateManagers[pack.plan].getSlot(pack.accountId, "quota", s.length)
+      return ns.settings.rateManagers[pack.plan]
+        .getSlot(pack.accountId, "quota", s.length)
         .then(function(passed) {
           rlify_(passed, pack);
           pack.size = s.length;
-          return pack.ok ? ns.write(ns.getPrivateKey(pack.accountId, pack.id), s, pack.lifetime) : pack;
+          return  pack.ok ? 
+            ns.write(ns.getPrivateKey(pack.accountId, pack.id), s, pack.lifetime).then (function (result) { return pack;} )
+            : pack;
         })
         .then(function(result) {
           if (pack.ok) {
             ns.statify(pack.accountId, couponKey, "set", s.length);
-            pack.code = 201;
+            pack.code = ns.settings.errors.CREATED;
           }
           return pack;
         });
@@ -1314,7 +1461,7 @@ var Process = (function(ns) {
       return d.type === params.type && d.plan === params.plan;
     })[0];
 
-    var pack = ns.errify(seed, 400, "no matching plan and type for coupon", {
+    var pack = ns.errify(seed, ns.settings.errors.BAD_REQUEST, "no matching plan and type for coupon", {
       ok: true
     });
 
@@ -1359,17 +1506,17 @@ var Process = (function(ns) {
         accountId: coupon.extraDays ? coupon.extraDays.toString(32) : "unknown"
       };
       if (!coupon.valid) {
-        ns.errify(false, 400, "key is invalid - maybe it needs an unlock parameter", pack);
+        ns.errify(false, ns.settings.errors.BAD_REQUEST, "key is invalid - maybe it needs an unlock parameter", pack);
       }
       else if (coupon.expired) {
-        ns.errify(false, 401, "key has expired", pack);
+        ns.errify(false, ns.settings.errors.UNAUTHORIZED, "key has expired", pack);
       }
       else {
-        pack.code = 200;
+        pack.code = ns.settings.errors.OK;
       }
     }
     catch (err) {
-      pack = ns.errify(false, 400, "key is invalid", {});
+      pack = ns.errify(false, ns.settings.errors.BAD_REQUEST, "key is invalid", {});
     }
 
     return pack;
@@ -1426,7 +1573,7 @@ var Process = (function(ns) {
 
     // get rid of no writers
     if (pack.type !== 'writer' && (pack.type !== 'updater' || !params.id) ) {
-      ns.errify(false, 401, (pack.id ? 
+      ns.errify(false, ns.settings.errors.UNAUTHORIZED, (pack.id ? 
        "You need a writer or updater key to update items-" : "You need an updater key to update items-" ) 
        + pack.type, pack);
       return Promise.resolve(pack);
@@ -1434,6 +1581,7 @@ var Process = (function(ns) {
 
     var couponKey = pack.key;
 
+    // reset the pack to what we might need for this
     pack = {
       writer: params.writer,
       updater: params.updater,
@@ -1442,17 +1590,26 @@ var Process = (function(ns) {
       plan: pack.plan,
       accountId: pack.accountId
     };
+
     
     if (params.alias) {
       pack.alias = params.alias;
     }
 
+    if (params.intent) {
+      pack.intent = params.intent;
+      ns.errify(pack.updater,ns.settings.errors.BAD_REQUEST,"if intent is specified you need to provide an updater key",pack);
+    }
+    if (!pack.ok) {
+      return Promise.resolve(pack);
+    }
+    
     // check we have something to write, could be in post or params
     var value = data;
 
     // if theres no data
     if (typeof value === typeof undefined) {
-      return Promise.resolve(ns.errify(false, 400, "You need to provide some data", pack));
+      return Promise.resolve(ns.errify(false, ns.settings.errors.BAD_REQUEST, "You need to provide some data", pack));
     }
 
     // can specify readers
@@ -1463,7 +1620,7 @@ var Process = (function(ns) {
         var seed = findSeed_(d) || {};
         var coupon = ns.decodeCoupon(d, seed.value);
         return coupon.valid && !coupon.expired;
-      }), 202, "warning:reader keys not validated-they may be locked", pack);
+      }), ns.settings.errors.ACCEPTED, "warning:reader keys not validated-they may be locked", pack);
       // it was just a warning
       pack.ok = true;
     }
@@ -1475,7 +1632,7 @@ var Process = (function(ns) {
         var seed = findSeed_(d) || {};
         var coupon = ns.decodeCoupon(d, seed.value);
         return coupon.valid && !coupon.expired && seed.type === "updater";
-      }), 202, "warning:updater keys not validated-they may be locked", pack);
+      }), ns.settings.errors.ACCEPTED, "warning:updater keys not validated-they may be locked", pack);
       // it was just a warning
       pack.ok = true;
     }
@@ -1527,15 +1684,18 @@ var Process = (function(ns) {
       accountId: pack.accountId,
       plan: pack.plan
     };
+    if (params.intention) {
+      pack.intention =params.intention;
+    }
 
     // check we have an id
     if (!pack.id) {
-      return Promise.resolve(ns.errify(false, 400, "You need to supply an id", pack));
+      return Promise.resolve(ns.errify(false, ns.settings.errors.BAD_REQUEST, "You need to supply an id", pack));
     }
 
     // check we dont have a data packet
     if (data) {
-      return Promise.resolve(ns.errify(false, 400, "Dont include data for reading. For writing, specify a writer key, not a reader key", pack));
+      return Promise.resolve(ns.errify(false, ns.settings.errors.BAD_REQUEST, "Dont include data for reading. For writing, specify a writer key, not a reader key", pack));
     }
 
     // now we can set it
@@ -1601,12 +1761,12 @@ var Process = (function(ns) {
 
     // check we have an id
     if (!pack.id) {
-      return Promise.resolve(ns.errify(false, 400, "You need to supply an id", pack));
+      return Promise.resolve(ns.errify(false, ns.settings.errors.BAD_REQUEST, "You need to supply an id", pack));
     }
 
     // check we dont have a data packet
     if (data) {
-      return Promise.resolve(ns.errify(false, 400, "Dont include data when removing", pack));
+      return Promise.resolve(ns.errify(false, ns.settings.errors.BAD_REQUEST, "Dont include data when removing", pack));
     }
 
     // now we can remove it
@@ -1656,8 +1816,6 @@ var Process = (function(ns) {
    */
    
   ns.multipleAlias = function (pack) {
-
-  console.log('entering multiple',pack);
   
     // we have to create one for each key in the pack, including the writer
     var proms = ['updaters','readers']
@@ -1758,7 +1916,7 @@ var Process = (function(ns) {
       return redisAlias_.set(key, text, "EX", Math.round (target/1000))
       .then (function(result) {
         ns.statify(aliasPack.accountId, aliasPack.key, "set", text.length);
-        aliasPack.code = 201;
+        aliasPack.code = ns.settings.errors.CREATED;
         return aliasPack;
       });
     });
@@ -1766,7 +1924,7 @@ var Process = (function(ns) {
   };
     
   /**
-   * asking the api to generate a key and validate the apikey
+   * asking the api to c a key and validate the apikey
    * @param {request} req
    * @return {Promise}
    */
@@ -1776,22 +1934,22 @@ var Process = (function(ns) {
 
     if (pack.ok) {
       var seed = findSeed_(pack.key);
-      ns.errify(seed, 500, "cant find seed for key", pack);
+      ns.errify(seed, ns.settings.errors.INTERNAL, "cant find seed for key", pack);
 
-      ns.errify(seed.type === "boss" && seed.boss, 500, "wrong type of boss key", pack);
+      ns.errify(seed.type === "boss" && seed.boss, ns.settings.errors.INTERNAL, "wrong type of boss key", pack);
 
       // the api key was fine, check that that mode was good
       ns.errify(seed.boss && seed.boss.indexOf(params.mode) !== -1,
-        400, "your boss key doesn't allow you to generate " + params.mode + " keys", pack);
+        ns.settings.errors.BAD_REQUEST, "your boss key doesn't allow you to generate " + params.mode + " keys", pack);
 
-      ns.errify(pack.accountId && pack.accountId !== "undefined", 500, "account id is missing", pack);
+      ns.errify(pack.accountId && pack.accountId !== "undefined", ns.settings.errors.INTERNAL, "account id is missing", pack);
 
       // now we can generate access keys
       if (pack.ok) {
 
         var ak = findAk_(seed, params.mode);
-        ns.errify(ak, 500, "cant find key to swap for boss key", pack);
-        ns.errify(!(params.days && params.seconds), 400, "choose either seconds or days for key duration", pack);
+        ns.errify(ak, ns.settings.errors.INTERNAL, "cant find key to swap for boss key", pack);
+        ns.errify(!(params.days && params.seconds), ns.settings.errors.BAD_REQUEST, "choose either seconds or days for key duration", pack);
 
         if (pack.ok) {
 
@@ -1828,7 +1986,7 @@ var Process = (function(ns) {
             var aBitRandom = Math.max(now.getTime(), target - lucky_.getRandBetween(0, 1000));
 
             pack.keys.push(
-              coupon_.generate(ak.value + pack.lockValue, aBitRandom, ak.name, pack.accountId)
+              coupon_.generate(ak.value + pack.lockValue, aBitRandom, ak.name, parseInt(pack.accountId,32))
             );
           }
         }
@@ -1858,7 +2016,7 @@ var Process = (function(ns) {
 
     var can =
       (!ob && pack.writer) || // we have a pack writer and there is no previous .. ie.. writing for the first time
-      (ob && pack.updater && ((pack.updater === ob.owner) || ob.updaters.indexOf(pack.updater) != -1)) || // the updater is the owner, or allowed
+      (ob && pack.updater && ((pack.updater === ob.owner) || ob.updaters && ob.updaters.indexOf(pack.updater) != -1)) || // the updater is the owner, or allowed
       (pack.writer === ob.owner); /// the owner can do what he wants     
 
     return can;
@@ -1889,7 +2047,7 @@ var Process = (function(ns) {
       ob = str ? JSON.parse(str) : null;
     }
     catch (err) {
-      ns.errify(false, 500, "data in exchange was invalid" + str, pack);
+      ns.errify(false, ns.settings.errors.INTERNAL, "data in exchange was invalid" + str, pack);
     }
     return ob;
   }
