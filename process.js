@@ -37,199 +37,10 @@ var Process = (function(ns) {
       ACCEPTED: 202,
       NO_CONTENT: 204
     },
-    plans: {
-      a: {
-        maxSize: .5 * 1000 * 1024,
-        maxLifetime: 3 * 60 * 60,
-        lifetime: 60 * 60,
-        limiters: {
-          burst: { // burst 
-            seconds: 30, // period over which to measure
-            rate: 30 // how many to allow in that period
-          },
-          minute: { // 
-            seconds: 120, // period over which to measure
-            rate: 60 // how many to allow in that period
-          },
-          day: { // its 2000 a day 
-            seconds: 60 * 60 * 24, // period over which to measure
-            rate: 2000 // how many to allow in that period
-          },
-          dailywrite: { //its 10mb a day
-            seconds: 60 * 60 * 24,
-            rate: 1000 * 1024 * 10,
-            type: "quota" // means this is a quota rather than a limitation
-          }
-        }
-      },
-      b: {
-        maxSize: 1 * 1000 * 1024,
-        maxLifetime: 24 * 60 * 60,
-        lifetime: 60 * 60,
-        limiters: {
-          burst: { // burst of up to 10 a second
-            seconds: 30, // period over which to measure
-            rate: 60 // how many to allow in that period
-          },
-          minute: { // its 200 a minute
-            seconds: 120, // period over which to measure
-            rate: 180 // how many to allow in that period
-          },
-          day: { // its 20000 a day 
-            seconds: 60 * 60 * 24, // period over which to measure
-            rate: 20000 // how many to allow in that period
-          },
-          dailywrite: { //its 100mb a day
-            seconds: 60 * 60 * 24,
-            rate: 1000 * 1024 * 100,
-            type: "quota" // means this is a quota rather than a limitation
-          }
-        }
-      },
-      x: {
-        maxSize: .2 * 1000 * 1024,
-        maxLifetime: 2 * 60 * 60,
-        lifetime: 60 * 60,
-        limiters: {
-          burst: { // burst of up to 10 a second
-            seconds: 30, // period over which to measure
-            rate: 60 // how many to allow in that period
-          },
-          minute: { // its 120 in a minute
-            seconds: 120, // period over which to measure
-            rate: 200 // how many to allow in that period
-          },
-          day: { // its 10000 a day 
-            seconds: 60 * 60 * 24, // period over which to measure
-            rate: 10000 // how many to allow in that period
-          },
-          dailywrite: { //its 50mb a day
-            seconds: 60 * 60 * 24,
-            rate: 1000 * 1024 * 50,
-            type: "quota" // means this is a quota rather than a limitation
-          }
-        }
-      },
-    },
-
-    seeds: [{
-      name: "wak",
-      type: "writer",
-      value: "d.r0L09-wkb#",
-      plan: "a"
-    }, {
-      name: "wbk",
-      type: "writer",
-      value: "ee.2LX-wkb#",
-      plan: "b"
-    }, {
-      name: "iak",
-      type: "intent",
-      value: "d.r0L-9-wkb#",
-      plan: "a"
-    }, {
-      name: "ibk",
-      type: "intent",
-      value: "e.2L=X-wkb#",
-      plan: "b"
-    }, {
-      name: "ixk",
-      type: "intent",
-      value: "e.2L9wkb#",
-      plan: "x"
-    }, {
-      name: "uak",
-      type: "updater",
-      value: "d.r00w6b#",
-      plan: "a"
-    }, {
-      name: "ubk",
-      type: "updater",
-      value: "eezLX-w#",
-      plan: "b"
-    }, {
-      name: "rak",
-      type: "reader",
-      value: "4%r009(wkB",
-      plan: "a"
-    }, {
-      name: "rbk",
-      type: "reader",
-      value: "0.T%r0(9(AB",
-      plan: "b"
-    }, {
-      name: "da",
-      type: "item",
-      value: "-i%09(AB",
-      plan: "a"
-    }, {
-      name: "db",
-      type: "item",
-      value: "T%0(+!(B",
-      plan: "b"
-    }, {
-      name: "sa",
-      type: "watchable",
-      value: "-i%9(AB",
-      plan: "a"
-    }, {
-      name: "sb",
-      type: "watchable",
-      value: "T%!(B",
-      plan: "b"
-    }, {
-      name: "sx",
-      type: "watchable",
-      value: "T%(!(C0",
-      plan: "x"
-    }, {
-      name: "ba",
-      type: "boss",
-      value: "z&9P=+&0^",
-      plan: "a",
-      boss: ["reader", "writer", "updater"],
-    }, {
-      name: "bb",
-      type: "boss",
-      value: "y12P=+&0^",
-      plan: "b",
-      boss: ["reader", "writer", "updater"]
-    }, {
-      name: "wxk",
-      type: "writer",
-      value: "d0L09-wkb#",
-      plan: "x"
-    }, {
-      name: "uxk",
-      type: "updater",
-      value: "dr00w-b#",
-      plan: "x"
-    }, {
-      name: "rxk",
-      type: "reader",
-      value: "4%r09(wkB",
-      plan: "x"
-    }, {
-      name: "dx",
-      type: "item",
-      value: "-i-%09(AB",
-      plan: "x"
-    }, {
-      name: "bx",
-      type: "boss",
-      value: "z&9=+&0^",
-      plan: "x",
-      boss: ["reader", "writer", "updater"],
-    }],
     rateManagers: {},
     keyLength: 14,
     allowAccessorChanges: false,
     days: 28,
-    itemSeed: "thestarsthatplaywithlaughingsamsdice",
-    adminId: "ear",
-    cryptoAlgo: 'aes-256-ctr',
-    cryptoSeed: 'zootalors',
-    accountSeed: "mauricechevalier",
     accountPrefix: "ac-",
     itemPrefix: "it-",
     statPrefix: "sw-",
@@ -248,10 +59,8 @@ var Process = (function(ns) {
       rate: 2,
       bosses: 4,
       accounts: 5,
-      subscribe: 0,
-      password: "mybo0xnbunieli1eso0qqve444rtheSeaAnd-24#the0ocEan-4#12#$--cafI9£4ax3"
+      subscribe: 0
     },
-
     statsSeconds: 15 * 60 // samples are every 15 mins
   };
 
@@ -603,7 +412,16 @@ var Process = (function(ns) {
       PORT: process.env.PORT || 8080,
       IP: process.env.IP || "0.0.0.0"
     });
+    
+    // get the secrets from config file
+    var secrets = appConfigs.get("secrets");
 
+    // move them into the settings
+    Object.keys(secrets).forEach (function (d) {
+      ns.settings[d] = secrets[d];
+    });
+    
+    
     // need env variables
     Process.env = {
       redisPort: appConfigs.get("REDIS_PORT"),

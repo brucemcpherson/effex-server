@@ -1,8 +1,16 @@
 {
-    "REDIS_PASS":"<your redis password>",
-    "REDIS_PORT":"<your redis port>",
-    "REDIS_IP":"<your redis ip>",
-    "EFFEX_MASTER_SEED":"<some random string to encrypt with",
-    "EFFEX_ALGO":"<some random string to generate coupons with",
-    "EFFEX_ADMIN":"<some string thats required as a password for admin activities"
+  "REDIS_PASS": "<your redis password>",
+  "REDIS_PORT": "<your redis port>",
+  "REDIS_IP": "<your redis ip>",
+  "EFFEX_MASTER_SEED": "<some random string to encrypt with",
+  "EFFEX_ALGO": "<some random string to generate coupons with",
+  "EFFEX_ADMIN": "<some string thats required as a password for admin activities",
+  "secrets": {
+    "plans": "<one object for each plan .. for template see me>"
+    "seeds": ["<one object for each plan/key type combination .. for template see me>"],
+    "itemSeed": "<some password to use to help with item encryptions>",
+    "cryptoAlgo": "<crypto algo to use ... eg... aes-256-ctr>",
+    "cryptoSeed": "<overall seed to use fo encrypting data>",
+    "accountSeed": "<seed to use to encrypt account data>"
+  }
 }
