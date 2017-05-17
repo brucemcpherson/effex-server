@@ -11,6 +11,15 @@
     "itemSeed": "<some password to use to help with item encryptions>",
     "cryptoAlgo": "<crypto algo to use ... eg... aes-256-ctr>",
     "cryptoSeed": "<overall seed to use fo encrypting data>",
-    "accountSeed": "<seed to use to encrypt account data>"
+    "accountSeed": "<seed to use to encrypt account data>",
+    "db":"<an object with each of the db number for the various redis types>",
+    "accountPrefix": "ac-",
+    "itemPrefix": "it-",
+    "statPrefix": "sw-",
+    "aliasPrefix": "ap-",
+    "intentPrefix": "in-",
+    "watchablePrefix": "wt-",
+    "logPrefix": "lg-",
+    "watchLogPrefix": "wl-"
   }
 }

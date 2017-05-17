@@ -2,6 +2,7 @@
 app.yaml
 #myconfig
 config.json
+secrets.js
 
 # Logs
 logs

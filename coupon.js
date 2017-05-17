@@ -7,13 +7,15 @@ module.exports =  function (algo) {
 
   var self = this;
   var crypto = require('crypto');
-  
+  var lucky = require('./lucky');
+
   // changing this will invalidate all previous tokeself 
   var ALGO = algo + "#humpity@trumpity";
   var SIG_SIZE = 3;
-
+  var MAX_PAD = 4;
+  
   // a coupon looks like this
-  // prefix-sig-expiryhash
+  // prefix-pad+sig-expiryhash
   // an extended coupon also contaiself data about number of days to extend from today in the expiryhash
 
   
@@ -44,9 +46,12 @@ module.exports =  function (algo) {
     }
     
     var result = getCode_ ( salt, prefix,  expiry.toString(32), extendDays, false);
+    
+
     return result.coupon;
   };
   
+
   /**
    * generate a coupon code with an expiry date of n days from now
    * @param {string} salt your private key
@@ -85,9 +90,12 @@ module.exports =  function (algo) {
   self.decode = function (salt, coupon) {
 
     var matches = (coupon || "").split("-");
-    var valid,c;
+    var valid,c,padding,sig;
     try {
-      c = getCode_ (salt, matches[0], matches[1] + matches[2], 0 , true);
+      // remove the padding
+      padding = matches[1].slice (0,matches[1].length - SIG_SIZE);
+      sig = matches[1].slice (padding.length);
+      c = getCode_ (salt, matches[0], sig + matches[2], 0 , true, padding);
       valid = coupon && c.coupon === coupon;
     }
     catch (err) {
@@ -210,9 +218,10 @@ module.exports =  function (algo) {
    * @param {string} target the expiry date as string32
    * @param {number} extendDays if not 0, will make a token that has an extended number of days from the time its decoded
    * @param {boolean} [decoding=false] whether we're decoding from an existing coupon
+   * @param {string} padding any predefined padding
    * @return {object} the result
    */
-  function getCode_ ( salt, prefix, target, extendDays , decoding) {
+  function getCode_ ( salt, prefix, target, extendDays , decoding,padding) {
     
 
     if (typeof salt !== 'string' || salt.length < 6) {
@@ -275,8 +284,16 @@ module.exports =  function (algo) {
       // scramble it all up
       var scramble = scramble_ (seq, sig + expiry32 + ex32,false);
       
+      // add random padding
+      padding = decoding ? padding : lucky.getString({
+        size:0,
+        maxSize:MAX_PAD
+      });
+      
+      var paddedSig = padding+scramble.slice(0,SIG_SIZE);
+      
       return {
-        coupon:prefix+"-" + scramble.slice(0,SIG_SIZE) +"-"+scramble.slice (SIG_SIZE),
+        coupon:prefix+"-" + paddedSig +"-"+scramble.slice (SIG_SIZE),
         expiry:expiry,
         ex32:expiry32,
         extraDays:extraDays,

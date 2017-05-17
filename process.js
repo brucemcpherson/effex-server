@@ -1,66 +1,28 @@
 /**
  * does the main stuff for the app
  */
-var appConfigs = require('./appConfigs.js');
+
 var RateManager = require('./ratemanager.js');
-var axios = require ('axios');
+var Useful = require('./useful');
+var GetEnvs = require("./getenvs");
+// get the secrets from config file
+var Secrets = require('./secrets');
 
 var Process = (function(ns) {
   var env_;
   var crypto = require('crypto');
-  var coupon_, redisAlias_, redisClient_,
-    redis, lucky_, redisRate_, redisStats_, redisBosses_,
-    redisAccounts_, redisIntent_, redisWatchable_,
-    redisApp_, redisSubscribe_, redisLog_, redisWatchLog_;
 
-  // used to keep track of sessions looking for push notifications
-  ns.sessions = {};
+  var coupon_, redisAlias_, redisClient_,
+    lucky_, redisRate_, redisStats_, redisBosses_,
+    redisAccounts_, redisIntent_, redisWatchable_,
+    redisLog_, redisWatchLog_, redisSyncSub_, redisSync_;
 
   // app options
   ns.settings = {
-    watchable: {
-      events: {
-        "expired": "expire",
-        "del": "remove",
-        "set": "update"
-      }
-    },
-    errors: {
-      NOT_FOUND: 404,
-      BAD_REQUEST: 400,
-      UNAUTHORIZED: 401,
-      FORBIDDEN: 403,
-      CONFLICT: 409,
-      INTERNAL: 500,
-      OK: 200,
-      CREATED: 201,
-      ACCEPTED: 202,
-      NO_CONTENT: 204
-    },
     rateManagers: {},
     keyLength: 14,
     allowAccessorChanges: false,
     days: 28,
-    accountPrefix: "ac-",
-    itemPrefix: "it-",
-    statPrefix: "sw-",
-    aliasPrefix: "ap-",
-    intentPrefix: "in-",
-    watchablePrefix: "wt-",
-    logPrefix: "lg-",
-    watchLogPrefix: "wl-",
-    logLifetime: 60 * 60 * 24, // last for a day
-    watchLogLifetime: 60 * 60 * 28, // last for a day and a bit
-    intentLifetime: 20000, // intents last for 20 seconds
-    db: {
-      app: 1,
-      client: 0,
-      stats: 3,
-      rate: 2,
-      bosses: 4,
-      accounts: 5,
-      subscribe: 0
-    },
     statsSeconds: 15 * 60 // samples are every 15 mins
   };
 
@@ -402,38 +364,40 @@ var Process = (function(ns) {
     return ns.settings.itemPrefix + "-" + coupon_.sign(public, env_.effexMasterSeed + ns.settings.itemSeed).toString('base64EncodeWebSafe');
   };
 
+  /**
+   * this is used to synchronize time with the push server
+   */
+  ns.synchInit = function() {
+
+    // the push server will ask me to connect 
+    return redisSyncSub_.subscribe(ns.settings.redisSyncChannel)
+      .then(function(count) {
+        if (!count) console.log('failed to subscribe to ', ns.settings.redisSyncChannel);
+        // every time I get one of these, I'll write something
+        return redisSyncSub_.on('message', function(channel, message) {
+          var ob = Useful.obify(message).ob;
+          ob.writtenAt = new Date().getTime();
+          return redisSync_.set([ns.settings.syncPrefix, ob.syncId, ob.writtenAt].join("."), JSON.stringify(ob), "EX", ob.expire)
+            .then(function(r) {
+              if (!r) console.log("failed to write sync item", r, ob.syncId);
+            });
+        });
+      });
+  };
 
   /**
    * needs to be called before anything works
    */
   ns.init = function() {
 
-    appConfigs.load({
-      PORT: process.env.PORT || 8080,
-      IP: process.env.IP || "0.0.0.0"
-    });
-    
-    // get the secrets from config file
-    var secrets = appConfigs.get("secrets");
 
     // move them into the settings
-    Object.keys(secrets).forEach (function (d) {
-      ns.settings[d] = secrets[d];
+    Object.keys(Secrets).forEach(function(d) {
+      ns.settings[d] = Secrets[d];
     });
-    
-    
-    // need env variables
-    Process.env = {
-      redisPort: appConfigs.get("REDIS_PORT"),
-      redisIp: appConfigs.get("REDIS_IP"),
-      redisPass: appConfigs.get("REDIS_PASS"),
-      effexMasterSeed: appConfigs.get("EFFEX_MASTER_SEED"),
-      effexAlgo: appConfigs.get("EFFEX_ALGO"),
-      expressPort: appConfigs.get("PORT"),
-      expressHost: appConfigs.get("IP"),
-      adminKey: appConfigs.get("EFFEX_ADMIN")
-    };
-    env_ = Process.env;
+
+    // set up operational settings
+    env_ = Process.env = GetEnvs.init();
 
     // check we got them all
     if (Object.keys(env_).some(function(d) {
@@ -452,67 +416,60 @@ var Process = (function(ns) {
 
     lucky_ = require("./lucky.js");
 
-    // and for connecting to redis
-    redis = require('ioredis');
 
-
-    // set up the base connecting object
-    function redisConf_(db) {
-      var p = {
-        db: ns.settings.db[db],
-        password: env_.redisPass,
-        port: env_.redisPort,
-        host: env_.redisIp,
-        showFriendlyErrorStack: true
-      };
-
-      try {
-        var red = new redis(p);
-        red.on("error", function(error) {
-          console.log('failed to open redis', error);
-          process.exit(2);
-        });
-        return red;
-      }
-      catch (err) {
-        console.log('failed to get redis handle', err);
-        process.exit(1);
-      }
-    }
-
-    redisRate_ = redisConf_('rate');
-    redisStats_ = redisConf_('stats');
-    redisBosses_ = redisConf_('bosses');
-    redisAccounts_ = redisConf_('accounts');
-    redisApp_ = redisConf_('app');
-    redisClient_ = redisConf_('client');
-    redisSubscribe_ = redisConf_('subscribe');
+    redisRate_ = GetEnvs.redisConf('rate', env_);
+    redisStats_ = GetEnvs.redisConf('stats', env_);
+    redisBosses_ = GetEnvs.redisConf('bosses', env_);
+    redisAccounts_ = GetEnvs.redisConf('accounts', env_);
+    redisClient_ = GetEnvs.redisConf('client', env_);
 
     // just put support items in the same db
-    redisIntent_ = redisApp_;
-    redisWatchable_ = redisApp_;
-    redisAlias_ = redisApp_;
-    redisLog_ = redisApp_;
-    redisWatchLog_ = redisRate_;
-    
-    // set up keyspace event monitoring - watching out for del, expired and set
-    redisSubscribe_.config('set', 'notify-keyspace-events', 'Exg$')
-      .then(function() {
-        // subscribe to  datbase changes
-        return redisSubscribe_.psubscribe('__keyevent@' + ns.settings.db.client + '__:*');
-      })
-      .then(function() {
-        console.log('subscribed');
-        redisSubscribe_.on('pmessage', function(pattern, channel, message) {
-          var method = channel.replace(/.*__:/, '');
-          // if its one we care about
-          if (ns.settings.watchable.events[method]) {
-            // the default 'who' is system reported - redis
-            ns.logEvent(method, message, "redis");
-          }
-        });
-      });
+    redisIntent_ = GetEnvs.redisConf('app', env_);
+    redisWatchable_ = GetEnvs.redisConf('app', env_);
+    redisAlias_ = GetEnvs.redisConf('app', env_);
+    redisLog_ = GetEnvs.redisConf('log', env_);
+    redisSyncSub_ = GetEnvs.redisConf('ts', env_);
+    redisSync_ = GetEnvs.redisConf('ts', env_);
+    redisWatchLog_ = GetEnvs.redisConf('rate', env_);
 
+    // define some lua functions
+
+    // we'll use scripting to maintain atomicity
+    // will return null if didnt exist, and was created, a ttl if not
+    redisIntent_.defineCommand('insert_if_missing', {
+      numberOfKeys: 1,
+      lua: `if redis.call("exists", KEYS[1]) == 1 then
+              return tonumber(redis.call("ttl" , KEYS[1]))
+            else
+              redis.call ("set",KEYS[1],ARGV[1])
+              redis.call ("expire",KEYS[1],tonumber(ARGV[2]))
+              return nil
+            end`
+    });
+
+    // key 1 = the item key
+    // argv 1 = the content to expect
+    // if the item exists and the content is what was expected, delete it
+    // returns nil .. the thing didnt exist , -1 it existed but didnt match , 0 it failed to delete , 1 it deleted
+    // use redis.remove_if_matches (keytomatch, contenttoexpect)
+    redisIntent_.defineCommand('remove_if_matches', {
+      numberOfKeys: 1,
+      lua: `if redis.call("exists", KEYS[1]) == 1 then
+              local data = redis.call ("GET", KEYS[1])
+              if (data == ARGV[1]) then
+                return redis.call ("DEL", KEYS[1])
+              else
+                return -1
+              end
+            else
+              return nil
+            end`
+    });
+
+
+
+    // used to synch time between push and api server
+    ns.synchInit();
 
     // need a rate manager for each possible plan
 
@@ -527,304 +484,60 @@ var Process = (function(ns) {
   };
 
   /**
-   * this removes watching
-   * @param {object} params the parameters
-   */
-  ns.unWatchUrlCallback = function (params) {
-    
-    // first check that we have a valid watchable
-    var wPack = ns.getCouponPack (params.watchable, params);
-    if (!wPack.ok) return Promise.resolve (wPack);
-   
-    var touched = Object.keys(ns.sessions)
-      .filter (function (d) {
-        // find all the watchers that have this key
-        return Object.keys(ns.sessions[d].watchables)
-          .some (function (e) {
-            return e === params.watchable;
-          });
-      })
-      .map (function(d) {
-        if (Object.keys(ns.sessions[d].watchables).length === 1 ) {
-          // its the only one so delete it
-          delete ns.sessions[d].watchables;
-        }
-        else {
-          // just delete this watchable
-          delete ns.sessions[d].watchables[params.watchable];
-        }
-        return d;
-      });
-    
-    wPack.code = ns.settings.errors.NO_CONTENT;
-    ns.errify(touched.length,ns.settings.errors.NOT_FOUND,"no matching watchables active",wPack);
-    return Promise.resolve (wPack);
-  };
-
-  ns.watchUrlCallback = function (params) {
-    
-    // first check that we have a valid watchable
-    var wPack = ns.getCouponPack (params.watchable, params);
-    if (!wPack.ok) return Promise.resolve (wPack);
-   
-    // now set up the socket key
-    ns.errify ( params.data.url && params.data.method , ns.settings.errors.BAD_REQUEST , "url and method needed", wPack);
-    if (!wPack.ok) return Promise.resolve (wPack);
-    
-     
-    // maybe first time for this combinatin of url/method   
-    var sessionKey = params.data.method + "-" + params.data.url;
-    if (!ns.sessions[sessionKey]) {
-      ns.sessions[sessionKey] = {
-        url:params.data.url,
-        method:params.data.method,
-        watchables:{}
-      };
-    }
-
-    // set up this specific watchable against this url          
-    ns.sessions[sessionKey].watchables[params.watchable] = {
-      session:params.session,
-      created:new Date().getTime(),
-      nextEvent:params.data.nextEvent || new Date().getTime(),
-      message:params.data.message || "",
-      stopped:false
-    }; 
-   
-    return Promise.resolve (wPack);
-  };
-
-    
-  /**
-   * emits any outstanding events
-   * @param {string} sxKey the provate encoded data item key
-   * @param {number} logTime the official time of the event
-   */
-  ns.emitter = function(sxKey,logTime) {
-
-    // for a particular sx, emit any outstanding events
-    var wKey = ns.settings.watchablePrefix + sxKey + "*";
-    var wob,wall;
-    
-    // get any fully matching lkeys
-    return redisWatchable_.keys(wKey)
-      .then(function(w) {
-        wall = w[0];
-        return wall ? redisWatchable_.get(wall) : null;
-      })
-      .then(function(result) {
-        // i suppose this is possible if the item expires just here, but its not an emergency
-        if (!result) {
-          console.log('failed getting watchable for emit data', wall);
-          return Promise.resolve(null);
-        }
-        else {
-          // this is the watch item details
-          wob = obify_(result, {});
-
-          // this is item's the private key
-          var s = wall.split(".");
-          var privateKey = s[1];
-          var method = s[2];
-
-          // now we need the zvalues for this item
-          var lkey = ns.settings.logPrefix + privateKey + "." + method;
-          return redisLog_.zrangebyscore(lkey, 0, Infinity);
-        }
-      })
-      .then(function(r) {
-
-        // check which sessions care about this item
-        if (!r)return Promise.resolve (null);
-        var zValues = r.map(function(d) {
-          return parseInt(d, 10);
-        });
-
-        Object.keys(ns.sessions).forEach(function(d) {
-          var session = ns.sessions[d];
-          var wat = session && session.watchables[sxKey];
-
-          // if this session cares, it will have a watch key
-          if (wat) {
-            
-            // filter out the emits according to the last event they saw
-            var emits = zValues.filter(function(f) {
-              return f >= wat.nextEvent;
-            });
-            
-            // send it
-            if (emits.length) {
-              
-              var packet = {
-                id:wob.id,
-                alias:wob.alias || "",
-                value:emits,
-                key:sxKey,
-                event:wob.event,
-                session:wat.session,
-                message:wat.message || ""
-              };
-              
-              var watchLog = {
-                id:packet.id,
-                alias:packet.alias,
-                key:packet.key,
-                event:packet.event,
-                session:packet.session,
-                state:"pending"
-              };
-              
-              if (session.socket) {
-                // doing push
-                watchLog.type = "push";
-                session.socket.emit(sxKey, packet);
-                watchLog.state = "emitted";
-                ns.logWatchLog(sxKey, wob.key , logTime, watchLog);
-                
-              }
-              
-              else if (session.url) { 
-                // doing url push
-                var url = session.url + (session.url.indexOf("?") !== -1 ? "&" : "?") + "watchable=" + sxKey;
-                var data = session.method === "POST" || session.method === "PUT" || session.method === "PATCH" ? packet : null;
-                if (!data) url += ("&=" + encodeURIComponent (JSON.stringify(packet)));
-                var ac = {
-                  method: session.method,
-                  url: url
-                };
-                if (data) ac.data = data;
-                watchLog.type="url";
-                watchLog.method=ac.method;
-                watchLog.url=url;
-                
-                axios (ac)
-                .then (function (result) {
-                  watchLog.state = "emitted";
-                  ns.logWatchLog(sxKey, wob.key , logTime, watchLog);
-                })
-                .catch(function(err) {
-                  watchLog.state="failed";
-                  watchLog.error = err.response.statusText;
-                  watchLog.code=err.response.status;
-                  ns.logWatchLog(sxKey, wob.key , logTime, watchLog);
-                });
-                
-              }
-              else {
-                console.log ('invalid emit instructions', wat);
-                watchLog.state = "failed";
-                watchLog.error = "invalid emit instructions";
-                watchLog.code = 500;
-                ns.logWatchLog(sxKey, wob.key , logTime, watchLog);
-              }
-              wat.nextEvent = emits[emits.length - 1] + 1;
-
-            }
-          }
-        });
-
-      })
-      .catch(function(err) {
-        // just log
-        console.log(err, " failure servicing emitter for ", sxKey);
-      });
-
-
-  };
-  
- /**
    * watchlog .. useful for finding errors and tracking
    * @param {string} sxKey the watch key
-   * @param {string} accessKey the guy who wrote it
+   * @param {string} accessKey some acces key for this account
    * @param {number} [since=0] the start time 
    * @return {Promise} the result
    */
-  ns.getWatchLog = function(sxKey , accessKey, since) {
+  ns.getWatchLog = function(sxKey, accessKey, since) {
     since = since || 0;
 
-    var wkey = ns.settings.watchLogPrefix + [sxKey, accessKey].join(".") + "*";
+    // check the accesskey makes sense
+    var aPack = ns.getCouponPack(accessKey, {});
+    if (!aPack.ok) return Promise.resolve(aPack);
 
-    // get all the logs for this key
-    return redisWatchLog_.keys(wkey)
-      .then (function(keys) {
-      
-        return Promise.all (keys.map(function (key) {
-          return redisWatchLog_.get (key)
-            .then ( function (r) { return JSON.parse (r); });
-        }));
-      })
-      .then (function (results){
-        var f = results.filter (function (d) {
-          return d.logTime >= since;    
-        });
-        return f;
-      })
-      .then (function (results) {
-        return {
-          ok: results.length ? true : false,
-          code: results.length ? 200 : 404,
-          error: results.length ? "" : "no log watch items found",
-          value:results,
-          watchable: sxKey,
-          reader: accessKey,
-          watchableState: ns.getCouponPack(sxKey, {}).error,
-          accessKeyState: ns.getCouponPack(accessKey, {}).error
-        };
-      });
-  };
 
- /**
-   * watchlog .. useful for finding errors and tracking
-   * @param {string} sxKey the watch key
-   * @param {string} accessKey the guy who wrote it
-   * @param {number} logTime when it happemed
-   * @param {object} packet the data to log
-   * @return {Promise} the result
-   */
-  ns.logWatchLog = function(sxKey , accessKey, logTime, packet) {
-    // expiry times for watchlog are fixed
-    // a watch packet
-    // key - the sxkey + the key that created it (for security) + the of the event + some random to avoid clashes at same ms.
-    var key = ns.settings.watchLogPrefix + [sxKey, accessKey,logTime,Math.round(Math.random()*1000)].join(".");
-    return redisWatchLog_.set (key , JSON.stringify({packet:packet, logTime:logTime}), "EX", ns.settings.watchLogLifetime);
-  };
-  /**
-   * logs an event against a data item
-   * @param {string} method the method reported by redis (set/del/expired)
-   * @param {string} key the provate encoded data item key
-   * @param {string} who which session is provoking the event.. not implemented for now - maybe later
-   * @param {string} [logTime=now] the logtime if required
-   */
-  ns.logEvent = function(method, key, who, logTime) {
-    // expiry times for log event are not related to data lifetime
-    // they are the maximum subscription history time
+    // check the sxkey makes sense, but expired is fine
+    var keyPack = ns.getCouponPack(sxKey, {});
 
-    logTime = logTime || new Date().getTime();
-    
-    // log events are keyed  by their private item key
-    var lkey = ns.settings.logPrefix + key + "." + method;
+    // check the accountids match
+    ns.errify(keyPack.accountId === aPack.accountId, ns.settings.errors.FORBIDDEN, "access and watchable are from different accounts", keyPack);
+    if (!keyPack.ok) return Promise.resolve(keyPack);
 
-    // kick off the search for anybody watching this - its key will contain the item's private key
-    var wKey = ns.settings.watchablePrefix + "*" + key + "*" + method;
+    // check the account is viable
+    return ns.checkAccount(aPack)
+      .then(function(pack) {
+        if (!pack.ok) return pack;
 
-    // add an observation for this log entry
-    var zadd = redisLog_.zadd(lkey, logTime, logTime)
-      .then(function(result) {
-        // set an expire time some standard amount from now .. dont care to track this
-        Promise.all ( [redisWatchable_.keys (wKey) ,redisLog_.expire(lkey, ns.settings.logLifetime)])
-        .then (function (pt) {
-          var keys = pt[0];
-          
-          keys.forEach (function (k) {
-            var sxKey = k.split(".")[0].replace(ns.settings.watchablePrefix,"");
-            ns.emitter (sxKey,logTime);
+        var wkey = ns.settings.watchLogPrefix + [sxKey, "*"].join(".");
+
+        return Useful.getMatchingObs(redisWatchLog_, wkey)
+          .then(function(results) {
+
+            var f = results.filter(function(d) {
+              return d.data.logTime >= since;
+            });
+            return f.map(function(d) {
+              return d.data;
+            });
+          })
+          .then(function(results) {
+
+            return {
+              ok: results.length ? true : false,
+              code: results.length ? 200 : 404,
+              error: results.length ? "" : "no log watch items found",
+              value: results,
+              watchable: sxKey,
+              reader: accessKey,
+              watchableState: ns.getCouponPack(sxKey, {}).error,
+              accessKeyState: ns.getCouponPack(accessKey, {}).error
+            };
           });
-        });
       });
-
-
-    return zadd;
   };
+
 
   /**
    * set a value
@@ -875,40 +588,73 @@ var Process = (function(ns) {
    */
   ns.createIntent = function(pack) {
 
-    if (pack.intention) {
-      ns.errify(pack.intention === "update", ns.settings.errors.BAD_REQUEST, "invalid intention parameter " + pack.intention, pack);
-      if (pack.ok) {
-        // the key is the item id - there can only be one intent per id 
-        // the body is the intent authorization + the reader key (which will later be used for checking)
-        // intents are free from a quota point of view hence no statify
+    // if we dont have any intention, then nothing to do
+    if (!pack.intention) return Promise.resolve(pack);
 
-        // need to generate a coupon
-        var seed = ns.settings.seeds.filter(function(d) {
-          return d.type === "intent" && d.plan === pack.plan;
-        })[0];
+    // now create an intention
+    ns.errify(pack.intention === "update", ns.settings.errors.BAD_REQUEST, "invalid intention parameter " + pack.intention, pack);
+    if (!pack.ok) return Promise.resolve(pack);
 
-        if (ns.errify(seed, ns.settings.errors.INTERNAL, "couldnt find an intent seed for the plan", pack).ok) {
-          var auth = coupon_.generate(
-            seed.value,
-            new Date().getTime() + ns.settings.intentLifetime,
-            seed.name,
-            parseInt(pack.accountId, 32)
-          );
-          var key = ns.settings.intentPrefix + pack.id;
-          // let it live for a few extra seconds, since its the coupon that will be used 
-          // to check for expiration to avoid an unnecessary caceh access
-          return redisIntent_.set(key, auth + "," + pack.reader, "EX", 10 + Math.round(ns.settings.intentLifetime / 1000))
-            .then(function(result) {
-              pack.intent = auth;
-              pack.intentExpires = Math.round(ns.settings.intentLifetime / 1000);
-              return pack;
-            });
+    // need to generate a coupon
+    var seed = ns.settings.seeds.filter(function(d) {
+      return d.type === "intent" && d.plan === pack.plan;
+    })[0];
 
-        }
-      }
+    if (ns.errify(seed, ns.settings.errors.INTERNAL, "couldnt find an intent seed for the plan", pack).ok) {
+      var auth = coupon_.generate(
+        seed.value,
+        new Date().getTime() + ns.settings.intentLifetime,
+        seed.name,
+        parseInt(pack.accountId, 32)
+      );
     }
-    return Promise.resolve(pack);
+    if (!pack.ok) return Promise.resolve(pack);
 
+    // all is fine, now check slot is available and grab it
+    // the key is the item id - there can only be one intent per id 
+    // the body is the intent authorization + the reader key (which will later be used for checking)
+    // intents are free from a quota point of view hence no statify
+    // but first we need to ensure that there's not alreay an intent on this item
+    var key = ns.settings.intentPrefix + pack.id;
+    var lft = Math.round(ns.settings.intentLifetime / 1000);
+
+
+    // this is a custom method created earlier
+    return redisIntent_.insert_if_missing(key, auth + "," + pack.reader, lft)
+      .then(function(e) {
+        ns.errify(e === null, ns.settings.errors.LOCKED, "an intention is already taken on this item", pack);
+
+        // if we got a null back, then all was good - we created it
+        if (pack.ok) {
+
+          pack.intent = auth;
+          pack.intentExpires = lft;
+        }
+        else {
+
+          pack.intentExpires = e;
+        }
+        return pack;
+      })
+      .catch(function(e) {
+        return ns.errify(false, ns.settings.errors.INTERNAL, e, pack);
+      });
+
+
+  };
+
+  /**
+   * get the event list for this log key
+   * @param {string} lkey the log key
+   * @return {Promise}
+   */
+  ns.getLoggedEvents = function(lkey) {
+    return redisLog_.zrangebyscore(lkey, 0, Infinity)
+      .then(function(r) {
+        return (r || []).map(function(d) {
+          return parseInt(d, 10);
+        });
+      });
   };
 
   /**
@@ -916,74 +662,104 @@ var Process = (function(ns) {
    * @param {object} params the params
    * @return {Promise} the result
    */
-  ns.getWatched = function(params) {
+  ns.pullLogEvents = function(params) {
 
-    // this validates the watchable key
-    var wPack = ns.getCouponPack(params.watchable, params);
-    if (!wPack.ok) return Promise.resolve(wPack);
-    var since = params.since || 0;
+    // this'll probably be a get , so dup params as if it were a post
+    var p = JSON.parse(JSON.stringify(params));
+    p.data = p.data || JSON.parse(JSON.stringify(p));
+    p.data.type = "pull";
+    var now = new Date().getTime();
 
-    // get whats being watched
-    var key = ns.settings.watchablePrefix + wPack.key + ".*";
-    return redisWatchable_.keys(key)
-      .then(function(keys) {
-        ns.errify(keys.length, ns.settings.errors.NOT_FOUND, "no keys found to match " + key, wPack);
+    // this is about making sure we have auth to read the thing
+    return ns.onPossible(p)
+      .then(function(result) {
+        var pack = result.pack;
 
-        ns.errify(keys.length === 1, ns.settings.errors.INTERNAL, "ambigous watchable keys", wPack);
-        if (wPack.ok) {
-          return redisWatchable_.get(keys[0])
-            .then(function(result) {
-              // check we have it
-              ns.errify(result, ns.settings.errors.INTERNAL, "missing watchable", wPack);
-              return {
-                pack: wPack,
-                content: obify_ (result , {}) || {},
-                key: keys[0]
-              };
-            })
-            .then(function(result) {
-              var pack = result.pack;
-              pack.id = result.content.id;
-              pack.alias = result.content.alias || "";
-              pack.event = result.content.event;
-              var key = result.key;
-              if (!pack.ok) return pack;
+        // we don't actually want the data values
+        delete pack.value;
 
-              // now we have the watchable and all is ok - we can get the logs
-              var s = key.split(".");
-              var itemKey = s[1];
-              var method = s[2];
-              var logKey = ns.settings.logPrefix + itemKey + "." + method;
-              return redisLog_.zrangebyscore(logKey, since, Infinity)
-                .then(function(result) {
+        if (!pack.ok) return {
+          pack: pack
+        };
 
-                  pack.value = (result || []).map(function(d) {
-                    return parseInt(d, 10);
-                  });
-                  return pack;
-                });
-            });
+        // get the redis equivalent method (for example update (efx) === set (redis))
+        var redisEvent = Object.keys(ns.settings.watchable.events).filter(function(k) {
+          return ns.settings.watchable.events[k] === p.data.event;
+        })[0];
+        ns.errify(redisEvent, ns.settings.errors.BAD_REQUEST, "invalid event", pack);
+        if (!pack.ok) return {
+          pack: pack
+        };
+
+
+        // get the private key for this item and make the log key
+        // log events are keyed  by their private item key
+        var pkey = ns.getPrivateKey(pack.accountId, pack.id);
+
+        // this will find any log entries for this id
+        var lkey = ns.settings.logPrefix + pkey + "." + redisEvent;
+
+        // this will find who is watching this pkey
+        var wkey = ns.settings.watchablePrefix + [p.data.watchable || "*", pkey, redisEvent].join(".");
+
+        //now get both the log entries and who is watching them
+        return Promise.all([ns.getLoggedEvents(lkey), Useful.getMatchingObs(redisWatchable_, wkey)])
+          .then(function(results) {
+            return {
+              sx: results[1],
+              lg: results[0],
+              pack: pack
+            };
+          });
+      })
+      .then(function(results) {
+        var pack = results.pack;
+        var sx = results.sx;
+        var values = results.lg || [];
+
+        if (!pack.ok) return pack;
+
+        // now create the pull packet
+        pack.watchables = sx.map(function(d) {
+
+          var packet = {
+            created: d.data.created,
+            watchable: d.key.split(".")[0].slice(ns.settings.watchablePrefix.length),
+            nextevent: d.data.nextevent,
+            event: p.data.event,
+            options: d.data.options
+          };
+
+          // TODO redact message if key doesnt match key used
+          return packet;
+        });
+
+        // and finally the list of values
+        var since = typeof p.data.since === typeof undefined ? 0 : parseInt(p.data.since, 10);
+
+        // server time now .. a -ve value means get the server time
+        // it wont return any values this time, but future calls can use it.
+        pack.now = now;
+        if (since < 0) {
+          since = now;
         }
-        else {
-          return wPack;
-        }
+        // filter out older items
+        pack.values = since ? values.filter(function(d) {
+          return d >= since;
+        }) : values;
+        return pack;
       })
       .catch(function(err) {
-        ns.errify(false, ns.settings.errors.INTERNAL, err, wPack);
+        console.log(err);
+        return Promise.resolve(ns.errify(false, ns.settings.errors.INTERNAL, err, {
+          ok: true
+        }));
       });
 
   };
 
 
-
-  /**
-   * create a watchable 
-   * @param {object} params the params
-   * @return {promise}
-   * /watch/key/item/event
-   */
-  ns.createWatchable = function(params) {
-
+  ns.onPossible = function(params) {
     // this validates the access key
     var keyPack = ns.getCouponPack(params.key, params);
 
@@ -991,16 +767,89 @@ var Process = (function(ns) {
     keyPack.reader = keyPack.key;
     keyPack.id = params.id;
 
-    if (!keyPack.ok) return Promise.resolve(keyPack);
+    // params will be in .data or in plain params
 
-    // the keys have been validated and the pack contains the item validation
 
-    // need to ensure this guy can read the key
+    if (!keyPack.ok) return Promise.resolve({
+      pack: keyPack,
+      keyPack: keyPack
+    });
+    keyPack.value = params.data;
+
+    // cvalidate all the things that we need for watching activitiy
+    ns.errify(params.data.pushid || params.data.type !== "push",
+      ns.settings.errors.BAD_REQUEST, "need a push id for a push", keyPack);
+
+    ns.errify((params.data.url && params.data.method) || params.data.type !== "url",
+      ns.settings.errors.BAD_REQUEST, "need a url & method for a url watch", keyPack);
+
+    ns.errify(params.data.type === "url" || params.data.type === "push" || params.data.type === "pull",
+      ns.settings.errors.BAD_REQUEST, "types allowed are url, push or pull", keyPack);
+
+    if (!keyPack.ok) return Promise.resolve({
+      pack: keyPack,
+      keyPack: keyPack
+    });
+
+    // now ensure this guy can read the key
     return dealWithAlias_(keyPack, params)
       .then(function(pack) {
         return ns.get(pack, keyPack.key);
       })
       .then(function(pack) {
+        return {
+          pack: pack,
+          keyPack: keyPack
+        };
+      });
+
+  };
+
+
+  /**
+   * unregister watchable
+   * @param
+   */
+  ns.offRegister = function(params) {
+
+    // TODO - maybe a bit slack as Im allowing deleting watchers without needing an access key
+    // TBD....
+    // check the key makes sense
+    var keyPack = ns.getCouponPack(params.watchable, params);
+    if (!keyPack.ok) return Promise.resolve(keyPack);
+
+
+    // generate the watchable key
+    var key = ns.settings.watchablePrefix + [params.watchable, "*"].join(".");
+
+    return redisWatchable_.keys(key)
+      .then(function(r) {
+        ns.errify(r.length === 1, 404, "ambiguous or missing watchables", keyPack);
+        if (!keyPack.ok) return keyPack;
+
+        // delete the thing
+        return redisWatchable_.del(r[0])
+          .then(function(t) {
+            keyPack.code = 204;
+            return ns.errify(t, 500, "failed to delete watchable", keyPack);
+          });
+
+      });
+
+  };
+  /**
+   * register watchable 
+   * @param {object} params the params
+   * @return {promise}
+   * /watch/key/item/event
+   */
+  ns.onRegister = function(params) {
+
+    // now ensure this guy can read the key
+    return ns.onPossible(params)
+      .then(function(result) {
+        var pack = result.pack;
+        var keyPack = result.keyPack;
         if (!pack.ok) return Promise.resolve(pack);
 
         // need to generate a coupon
@@ -1012,14 +861,13 @@ var Process = (function(ns) {
 
         // watchables lifetime is based on the thing they are watching
         var ex = pack.alias ? new Date(keyPack.validtill) : new Date(pack.validtill);
-        
-        // just in case we have multiple watches on the same access key/item, we can let the watchable live for up to an hour extra
-        var randomTime = Math.round(Math.random() * 360000);
-        var vill = ex.getTime() + randomTime;
-        
+
+        // just in case we have multiple watches on the same access key/item, we can let the watchable live a little longer
+        var vill = ex.getTime() + ns.settings.plusALittle * (1 + Math.random());
+
         // keep it in the store for a little extra to allow for any delays
-        var life = Math.ceil((vill - new Date().getTime())/1000) + 30;  
-        
+        var life = Math.ceil((vill - new Date().getTime()) / 1000) + 30;
+
         // now generate an id for this watchable
         pack.watchable = coupon_.generate(
           seed.value,
@@ -1031,6 +879,10 @@ var Process = (function(ns) {
         // all this stuff needs to go in the key for searching on
         // fix this to translate to private key for item
         pack.event = params.event;
+        pack.value = params.data;
+
+        // if start is negative, the 'now' time is delegated to the server to decide
+        pack.value.start = pack.value.start < 0 ? new Date().getTime() : pack.value.start;
 
         // get the redis equivalent method (for example update (efx) === set (redis))
         var redisEvent = Object.keys(ns.settings.watchable.events).filter(function(k) {
@@ -1040,15 +892,52 @@ var Process = (function(ns) {
         if (!pack.ok) return Promise.resolve(pack);
 
         // generate the key that can be used when events happen to see if they are interesting
-        var key = ns.settings.watchablePrefix + [pack.watchable, ns.getPrivateKey(pack.accountId, pack.id), redisEvent].join(".");
-        
+        var pk = ns.getPrivateKey(pack.accountId, pack.id);
+        var key = ns.settings.watchablePrefix + [pack.watchable, pk, redisEvent].join(".");
+        var wk = ns.settings.watchablePrefix + ["*", pk, redisEvent].join(".");
+
+        // special treatment to retire older duplicate push requests, 
+        // we dont need to wait for this one, just a clean up
+        Useful.getMatchingObs(redisWatchable_, wk)
+          .then(function(obs) {
+            var opts = pack.value;
+            var mess = JSON.stringify(opts.message || {});
+            return Promise.all(obs.map(function(d) {
+
+              if (d.key === key) {
+                // this means we've picked up the new one just being written already, so ignore it
+                return Promise.resolve(null);
+              }
+
+              else {
+                // check if it matches in principle to the new request and kill it if so
+                // can only kill url subs this way - push server kill subs on disconnect
+                var dopts = d.data.options;
+                if (dopts.type === opts.type && dopts.url === opts.url && dopts.type === "url" &&
+                  JSON.stringify(dopts.message || {}) === mess) {
+                  return redisWatchable_.expire(d.key, ns.settings.expireOnDroppedConnection)
+                    .then(function(t) {
+                      if (!t) {
+                        console.log("failed to expire after dedup", d.key);
+                      }
+                    });
+                }
+                else {
+                  return Promise.resolve(null);
+                }
+              }
+            }));
+          });
+
         // next we need to write the item to the watchables store
         return redisWatchable_.set(key, JSON.stringify({
             created: new Date().getTime(),
             key: pack.reader,
             alias: pack.alias,
             id: pack.id,
-            event: pack.event
+            event: pack.event,
+            options: pack.value,
+            nextevent: pack.value.start
           }), "EX", life)
           .then(function(result) {
             pack.code = ns.settings.errors.CREATED;
@@ -1059,8 +948,6 @@ var Process = (function(ns) {
 
 
       });
-
-
   };
 
   /**
@@ -1192,7 +1079,7 @@ var Process = (function(ns) {
   ns.set = function(pack, value, couponKey) {
 
     var now = new Date().getTime();
-    
+
     // get the plan info
     var plan = ns.settings.plans[pack.plan];
     ns.errify(plan, ns.settings.errors.INTERNAL, "cant find plan info for plan:" + pack.plan, pack);
@@ -1202,47 +1089,48 @@ var Process = (function(ns) {
       // - the life of the key creating it
       // - the given time (to the max of the key creating it)
       // - the plan lifetime
-      
+
       if (pack.ok && !pack.id && pack.writer) {
         pack.lifetime = pack.lifetime || plan.lifetime;
         ns.errify(pack.lifetime <= plan.maxLifetime || plan.maxLifetime === 0, ns.settings.errors.BAD_REQUEST,
           "max lifetime for your plan is " + pack.plan.maxLifetime, pack);
-        
+
         // decode the writer so we can workout the item lifetime
         var cp = ns.getCouponPack(pack.writer, {});
-        
+
         // double check writer is ok
-        ns.errify (cp.ok, ns.settings.errors.BAD_REQUEST,cp.error, pack);
+        ns.errify(cp.ok, ns.settings.errors.BAD_REQUEST, cp.error, pack);
         // use the min of max lifetime or the key life or the given number
         if (pack.ok) {
-          var life = Math.round((new Date(cp.validtill).getTime() - now)/1000);
+          var life = Math.round((new Date(cp.validtill).getTime() - now) / 1000);
           pack.lifetime = Math.min(pack.lifetime, plan.maxLifetime, life);
         }
       }
     }
-    
-    ns.errify (pack.id || pack.lifetime > 0, ns.settings.errors.INTERNAL , "couldnt calculate lifetime", pack);
-    
+
+    ns.errify(pack.id || pack.lifetime > 0, ns.settings.errors.INTERNAL, "couldnt calculate lifetime", pack);
+
     // if we're doing an update - changing the lifetime is not allowed
-    ns.errify (!(pack.id && pack.lifetime), ns.settings.errors.BAD_REQUEST , "an update cant change the lifetime", pack);
-    
+    ns.errify(!(pack.id && pack.lifetime), ns.settings.errors.BAD_REQUEST, "an update cant change the lifetime", pack);
+
     // but we can calculate the lifetime remaining for an update from its key
     if (pack.id) {
       var cd = ns.getCouponPack(pack.id, {});
-      
+
       // double check item is ok
-      ns.errify (cd.ok, ns.settings.errors.BAD_REQUEST,cd.error, pack);
-      
+      ns.errify(cd.ok, ns.settings.errors.BAD_REQUEST, cd.error, pack);
+
       // use the lifetime calculated from its key - now as the new lifetime
       if (pack.ok) {
-        pack.lifetime = Math.round((new Date(cd.validtill).getTime() - now)/1000);
+        pack.lifetime = Math.round((new Date(cd.validtill).getTime() - now) / 1000);
       }
-        
+
     }
     // go away if we didnt make it past those gates
     if (!pack.ok) {
-      return Promise.resolve(null);
+      return Promise.resolve(pack);
     }
+
 
     function checkIntention_(pr) {
 
@@ -1259,7 +1147,7 @@ var Process = (function(ns) {
       if (pack.intent) {
         var couponPack = ns.getCouponPack(pack.intent, {});
         ns.errify(couponPack.code !== ns.settings.errors.UNAUTHORIZED, couponPack.code, "intent key has expired - cant update", pack);
-        ns.errify(couponPack.ok, ns.settings.errors.CONFLICT, "intent key is invalid - cant update", pack);
+        ns.errify(couponPack.ok, ns.settings.errors.BAD_REQUEST, "intent key is invalid - cant update", pack);
       }
       if (!pack.ok) return Promise.resolve({
         ob: ob,
@@ -1276,7 +1164,7 @@ var Process = (function(ns) {
             var who = pack.intent + "," + pack.updater;
 
             //-- possiblly still hanging around in cache even though the key has actually expired so ignore it
-            ns.errify(result === who, ns.settings.errors.CONFLICT, "item is locked by another key", pack);
+            ns.errify(result === who, ns.settings.errors.LOCKED, "item is locked by another key." + who + "." + result, pack);
 
             //-- we can even advise the amount of time to wait to try again if i
             if (!pack.ok) {
@@ -1294,7 +1182,7 @@ var Process = (function(ns) {
 
           // if there was no lock, but there was an intent, myabe its been used up and deleted
           else {
-            ns.errify(!pack.intent, ns.settings.errors.CONFLICT, "Intent key has already been used", pack);
+            ns.errify(!pack.intent, ns.settings.errors.GONE, "Intent key has already been used", pack);
 
           }
 
@@ -1309,12 +1197,15 @@ var Process = (function(ns) {
     return getExistingThing_(pack)
       .then(function(result) {
         // first we need to check that there's not a lock
+
         return checkIntention_(result);
       })
       .then(function(result) {
+
         return writeOb_(result);
       })
       .then(function(pack) {
+
         if (!pack.ok || !pack.intent) return pack;
 
         // now we need to delete the intent since its now been used
@@ -1329,6 +1220,7 @@ var Process = (function(ns) {
           });
       })
       .then(function(pack) {
+
         // maybe there are aliase required, but only allowed if there's a writer key as well
         return pack.alias && pack.writer && pack.ok ? ns.multipleAlias(pack) : pack;
       })
@@ -1481,6 +1373,49 @@ var Process = (function(ns) {
   }
 
   /**
+   * remove an intent
+   * @param {object} params
+   */
+  ns.releaseIntent = function(params) {
+
+    // the intent key
+    var pack = ns.getCouponPack(params.intentkey, params);
+    if (!pack.ok) return Promise.resolve(pack);
+
+    var idPack = ns.getCouponPack(params.id, params);
+
+    // sort out alias if there is one
+    return dealWithAlias_(idPack, params)
+      .then(function(idPack) {
+        if (!idPack.ok) return idPack;
+
+        // the access key
+        var keyPack = ns.getCouponPack(params.updater, params);
+        if (!keyPack.ok) return keyPack;
+
+        // for looking up intent
+        var key = ns.settings.intentPrefix + idPack.key;
+        var content = pack.key + "," + keyPack.key;
+
+        // returns nil .. the thing didnt exist , -1 it existed but didnt match , 0 it failed to delete , 1 it deleted
+        return redisIntent_.remove_if_matches(key, content);
+      })
+      .then(function(r) {
+        if (r < 0) {
+          ns.errify(false, ns.settings.errors.NOT_FOUND, "intent is missing", pack);
+        }
+        if (r === 0) {
+          ns.errify(false, ns.settings.errors.INTERNAL, "intent failed to delete", pack);
+        }
+        // this is a good return
+        if (pack.ok) {
+          pack.code = ns.settings.errors.NO_CONTENT;
+        }
+        return pack;
+      });
+  };
+
+  /**
    * get a value
    * @param {string} key the key
    * @return {Promise}
@@ -1597,7 +1532,7 @@ var Process = (function(ns) {
         accountId: coupon.extraDays ? coupon.extraDays.toString(32) : "unknown"
       };
       if (!coupon.valid) {
-        ns.errify(false, ns.settings.errors.BAD_REQUEST, "key is invalid - maybe it needs an unlock parameter", pack);
+        ns.errify(false, ns.settings.errors.BAD_REQUEST, "key or alias are invalid", pack);
       }
       else if (coupon.expired) {
         ns.errify(false, ns.settings.errors.UNAUTHORIZED, "key has expired", pack);
@@ -1705,7 +1640,7 @@ var Process = (function(ns) {
     }
 
     // can specify readers
-    if (params.readers) {
+    if (params.readers && pack.ok) {
       // need to validate these are keys that can read
       pack.readers = params.readers.split(",");
       ns.errify(pack.readers.every(function(d) {
@@ -1718,7 +1653,7 @@ var Process = (function(ns) {
     }
 
     // and also updaters
-    if (params.updaters) {
+    if (params.updaters && pack.ok) {
       pack.updaters = params.updaters.split(",");
       ns.errify(pack.updaters.every(function(d) {
         var seed = findSeed_(d) || {};
@@ -1734,13 +1669,16 @@ var Process = (function(ns) {
     return Promise.all([ns.checkAccount(pack), pack.id ? dealWithAlias_(pack, params) : Promise.resolve(pack)])
       .then(function(results) {
 
-        return results.every(function(d) {
-            return d.ok
-          }) ?
-          ns.set(pack, value, couponKey) :
-          results.filter(function(d) {
+        if (results.every(function(d) {
+            return d.ok;
+          })) {
+          return ns.set(pack, value, couponKey);
+        }
+        else {
+          return results.filter(function(d) {
             return !d.ok;
           })[0];
+        }
       });
 
   };
@@ -1986,8 +1924,8 @@ var Process = (function(ns) {
         var nDays = params.days ? parseInt(params.days, 10) : 0;
         var nSeconds = params.seconds ? parseInt(params.seconds, 10) : 0;
 
-        // if nDays are specified then use that otherwise use the date of the key
-        var maxTime = new Date(keyPack.validtill).getTime();
+        // if nDays are specified then use that otherwise use the date of the item, plus a little
+        var maxTime = new Date(idPack.validtill).getTime() + ns.settings.plusALittle * (1 + Math.random());
         var now = new Date();
         var target = Math.min(nDays ? coupon_.addDate(now, "Date", nDays).getTime() :
           (nSeconds ? coupon_.addDate(now, "Seconds", nSeconds).getTime() : maxTime), maxTime);
@@ -2006,59 +1944,76 @@ var Process = (function(ns) {
           writer: pack.key
         };
 
-        // write to store
+        // key for to alias store
         var key = ns.settings.aliasPrefix + aliasPack.key + "-" + aliasPack.alias;
+
+
+        // encrypt the new id
         var text = encryptText_(aliasPack.id, key);
 
         // first we need to see if there is already one
+        // because there might be some work needed for anyone watching this
         return redisAlias_.get(key)
           .then(function(result) {
 
             // deal with consequences of old one being replaced
             if (result) {
               var ob = decryptText_(result, key);
-
               if (ob) {
+
                 // now we need to change any watchers of previous item using this alias
                 var obKey = ns.getPrivateKey(aliasPack.accountId, ob);
-
                 var wKey = ns.settings.watchablePrefix + "*" + obKey + "*";
 
+                Useful.getMatchingObs(redisWatchable_, wKey)
+                  .then(function(obs) {
 
-                // but we dont need to block progress with this or bother the user if it fails
-                redisWatchable_.keys(wKey)
-                  .then(function(wKeys) {
-                    // this will be all watchers of this item 
+                    // just work on the ones that match this alias (some might be alias free or adifferent key)
+                    obs.filter(function(d) {
+                      return d.data.key === aliasPack.key && d.data.alias === aliasPack.alias;
+                    })
 
-                    return Promise.all(wKeys.map(function(d) {
-                        // get them and convert to an ob;
-                        return redisWatchable_.get(d).then(function(r) {
-                          return {
-                            data: obify_(r, {}),
-                            oldKey: d
-                          };
+                    // now work through and rename and patch the id
+                    .forEach(function(d) {
+
+                      // change the watching key to the new one
+                      var nKey = d.key.replace(obKey, ns.getPrivateKey(aliasPack.accountId, aliasPack.id));
+
+
+                      // have to also update the internal id & patch the nextevent and last index
+                      d.data.id = aliasPack.id;
+                      d.data.nextevent = d.data.options.start;
+
+                      // the ttl of the new item will be the item plus a bit
+                      var ttl = Math.round(ns.settings.plusALittle * (1 + Math.random()) +
+                        (new Date(idPack.validtill).getTime() - new Date().getTime()) / 1000);
+
+                      // and we dont need to wait for this to happen
+                      redisWatchable_.set(nKey, JSON.stringify(d.data), "EX", ttl)
+                        .then(function(r) {
+                          // check ok then delete the original
+                          if (r !== "OK") {
+                            console.log('failed to create new alias watchable');
+                            return null;
+                          }
+                          else {
+                            return redisWatchable_.del(d.key);
+                          }
+                        })
+                        .then(function(r) {
+                          if (!r) console.log('failed to remove old alias watchable ', d.key)
                         });
-                      }))
-                      .then(function(obs) {
-                        // just keep the ones that match this key and alias combination
-                        obs.filter(function(d) {
-                            return d.data && d.data.key === aliasPack.key && d.data.alias === aliasPack.alias;
-                          })
-                          .forEach(function(d) {
-                            // finally, change the watching key to the new one
-                            var nKey = d.oldKey.replace(obKey, ns.getPrivateKey(aliasPack.accountId, aliasPack.id));
-                            redisWatchable_.rename(d.oldKey, nKey).then(function(r) {
 
-                            });
-                          });
-                      });
+                    });
                   });
               }
+
               else {
                 console.log("problem with obifying", result);
               }
             }
-            // now we can continue with writing the new one
+
+            // now we can continue with writing the new alias
             return redisAlias_.set(key, text, "EX", Math.round(target / 1000));
           })
           .then(function(result) {
@@ -2067,14 +2022,6 @@ var Process = (function(ns) {
             return aliasPack;
           });
 
-
-
-
-
-
-
-
-        return promAlias;
       });
 
   };
@@ -2217,6 +2164,11 @@ var Process = (function(ns) {
    * @return {object} the pack
    */
   ns.errify = function(test, code, error, pack) {
+
+    // allow to start from empty
+    pack = pack || {
+      ok: true
+    };
 
     // if the test is not truthy then its an error
     if (!test) {
