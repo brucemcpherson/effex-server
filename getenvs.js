@@ -19,10 +19,7 @@ module.exports = (function(ns) {
       effexAlgo: appConfigs.get("EFFEX_ALGO"),
       expressPort: appConfigs.get("PORT"),
       expressHost: appConfigs.get("IP"),
-      adminKey: appConfigs.get("EFFEX_ADMIN"),
-      socketPort:appConfigs.get("SOCKET_PORT"),
-      socketPassTimeout:appConfigs.get("SOCKET_PASS_TIMEOUT"),
-      socketPass:appConfigs.get("SOCKET_PASS")
+      adminKey: appConfigs.get("EFFEX_ADMIN")
     };
   };
   
