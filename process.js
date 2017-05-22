@@ -484,6 +484,53 @@ var Process = (function(ns) {
   };
 
   /**
+   * watchable.. get the watchable contents
+   * @param {object} params the params
+   * @return {Promise} the result
+   */
+  ns.getWatchable = function(params) {
+    var accessKey = params.reader;
+    var sxKey = params.watchable;
+
+    // check the accesskey makes sense
+    var aPack = ns.getCouponPack(accessKey, {});
+    if (!aPack.ok) return Promise.resolve(aPack);
+
+
+    // check the sxkey makes sense, but expired is fine
+    var keyPack = ns.getCouponPack(sxKey, {});
+
+    // check the accountids match
+    ns.errify(keyPack.accountId === aPack.accountId, ns.settings.errors.FORBIDDEN, "access and watchable are from different accounts", keyPack);
+    if (!keyPack.ok) return Promise.resolve(keyPack);
+
+    // check the account is viable
+    return ns.checkAccount(aPack)
+      .then(function(pack) {
+        if (!pack.ok) return pack;
+
+        var wkey = ns.settings.watchablePrefix + [sxKey, "*"].join(".");
+
+        return Useful.getMatchingObs(redisWatchable_, wkey)
+          .then(function(results) {
+            ns.errify(results.length === 1, ns.settings.errors.NOT_FOUND, "missing or ambigous watchable", pack);
+            var sx = results[0] && results[0].data;
+            ns.errify(sx && sx.key === accessKey, ns.settings.errors.UNAUTHORIZED, "access key mismatch", pack);
+            if (!pack.ok) return pack;
+
+            // all is good we can return the contents of the item
+            pack.value = sx;
+            
+            // but keep the key secret
+            delete pack.value.key;
+            
+            return pack;
+          });
+      });
+  };
+
+
+  /**
    * watchlog .. useful for finding errors and tracking
    * @param {string} sxKey the watch key
    * @param {string} accessKey some acces key for this account
@@ -824,14 +871,14 @@ var Process = (function(ns) {
 
     return redisWatchable_.keys(key)
       .then(function(r) {
-        ns.errify(r.length === 1, 404, "ambiguous or missing watchables", keyPack);
+        ns.errify(r.length === 1, ns.settings.errors.NOT_FOUND, "ambiguous or missing watchables", keyPack);
         if (!keyPack.ok) return keyPack;
 
         // delete the thing
         return redisWatchable_.del(r[0])
           .then(function(t) {
-            keyPack.code = 204;
-            return ns.errify(t, 500, "failed to delete watchable", keyPack);
+            keyPack.code = ns.settings.errors.NO_CONTENT;
+            return ns.errify(t, ns.settings.errors.INTERNAL, "failed to delete watchable", keyPack);
           });
 
       });
@@ -861,9 +908,7 @@ var Process = (function(ns) {
 
         // watchables lifetime is based on the thing they are watching
         var ex = pack.alias ? new Date(keyPack.validtill) : new Date(pack.validtill);
-
-        // just in case we have multiple watches on the same access key/item, we can let the watchable live a little longer
-        var vill = ex.getTime() + ns.settings.plusALittle * (1 + Math.random());
+        var vill = ex.getTime() + ns.settings.plusALittle;
 
         // keep it in the store for a little extra to allow for any delays
         var life = Math.ceil((vill - new Date().getTime()) / 1000) + 30;
@@ -1925,8 +1970,9 @@ var Process = (function(ns) {
         var nSeconds = params.seconds ? parseInt(params.seconds, 10) : 0;
 
         // if nDays are specified then use that otherwise use the date of the item, plus a little
-        var maxTime = new Date(idPack.validtill).getTime() + ns.settings.plusALittle * (1 + Math.random());
         var now = new Date();
+        var maxTime = Math.round(new Date(idPack.validtill).getTime() + ns.settings.plusALittle * (1 + Math.random()));
+
         var target = Math.min(nDays ? coupon_.addDate(now, "Date", nDays).getTime() :
           (nSeconds ? coupon_.addDate(now, "Seconds", nSeconds).getTime() : maxTime), maxTime);
 
@@ -2012,9 +2058,9 @@ var Process = (function(ns) {
                 console.log("problem with obifying", result);
               }
             }
-
+            
             // now we can continue with writing the new alias
-            return redisAlias_.set(key, text, "EX", Math.round(target / 1000));
+            return redisAlias_.set(key, text, "EX", Math.round((target - now) / 1000));
           })
           .then(function(result) {
             ns.statify(aliasPack.accountId, aliasPack.key, "set", text.length);

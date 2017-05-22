@@ -118,6 +118,7 @@ var App = (function(nsa) {
           quotas: "/quotas - get all the service quotas",
           eventLog:"/eventlog/:accesskey/:id/:event",
           watchLog:"/watchlog/:watchablekey/:accesskey",
+          watchable:"/watchable/:watchablekey/:accesskey",
           release:"/release/:id/:updater/:intent",
           parameters: {
             general: "callback=jsonpcallback",
@@ -252,6 +253,11 @@ var App = (function(nsa) {
       res.prom(Promise.resolve(Process.getWatchLog (params.watchable, params.reader , params.since)));
     });
 
+    //-- get the watchable
+    app.get("/watchable/:watchable/:reader", function(req, res) {
+      var params = Process.squashParams(req);
+      res.prom(Promise.resolve(Process.getWatchable (params)));
+    });
 
     //-- get logged events
     app.get("/eventlog/:key/:id/:event", function(req, res) {
