@@ -7,6 +7,7 @@ var express = require('express');
 var app = express();
 var cors = require('cors');
 var bodyParser = require('body-parser');
+var Secrets = require('./secrets');
 //var morgan = require("morgan");
 
 var Process = require('./process');
@@ -53,9 +54,10 @@ var App = (function(nsa) {
     // pick up ports from c9 env variables
     app.use(cors(copts));
     
-    app.use(bodyParser.json()); // to support JSON-encoded bodies
-    app.use(bodyParser.urlencoded({ // to support URL-encoded bodies
-      extended: false
+    // allow bigger than default posts
+    app.use(bodyParser.json({limit: Secrets.bodyLimit}));
+    app.use(bodyParser.urlencoded({
+       extended: true 
     }));
     //app.use(morgan('combined'));
     app.use(prommy);
@@ -94,7 +96,7 @@ var App = (function(nsa) {
         code: 200,
         info: {
           api:'effex-api',
-          version:'1.1'   
+          version:'1.3.1'   
         }}));
       });
     
